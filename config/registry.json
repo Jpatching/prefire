@@ -1,0 +1,11 @@
+{
+  "protocols": [
+    {
+      "name": "Drift Protocol",
+      "multisig_address": "",
+      "program_id": "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH",
+      "notes": "Research needed: find Security Council multisig address"
+    }
+  ],
+  "_comment": "Add top 10-20 Solana protocol multisig addresses here. Research each manually via Squads UI or on-chain discovery."
+}

@@ -1,0 +1,12 @@
+[package]
+name = "prefire-alerts"
+version = "0.1.0"
+edition = "2021"
+description = "Stage 4: Telegram, Discord, webhook alerts"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

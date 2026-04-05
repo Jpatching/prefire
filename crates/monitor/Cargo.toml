@@ -1,0 +1,13 @@
+[package]
+name = "prefire-monitor"
+version = "0.1.0"
+edition = "2021"
+description = "Stage 1: RPC subscriber + governance watch"
+
+[dependencies]
+solana-client = "2"
+solana-sdk = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

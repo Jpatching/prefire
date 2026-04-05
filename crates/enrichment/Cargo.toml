@@ -1,0 +1,13 @@
+[package]
+name = "prefire-enrichment"
+version = "0.1.0"
+edition = "2021"
+description = "Stage 2: Retroactive nonce/token scan after governance trigger"
+
+[dependencies]
+solana-client = "2"
+solana-sdk = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
