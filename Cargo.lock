@@ -2503,10 +2503,13 @@ dependencies = [
 name = "prefire-enrichment"
 version = "0.1.0"
 dependencies = [
+ "prefire-monitor",
  "serde",
  "serde_json",
  "solana-client",
  "solana-sdk",
+ "solana-transaction-status-client-types",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -2515,10 +2518,12 @@ dependencies = [
 name = "prefire-monitor"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "serde",
  "serde_json",
  "solana-client",
  "solana-sdk",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]

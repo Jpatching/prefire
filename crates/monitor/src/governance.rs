@@ -24,6 +24,13 @@ pub enum GovernanceEvent {
         description: String,
     },
 }
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MonitoredEvent {
+    pub signature: String,
+    pub event: GovernanceEvent,
+}
+
 pub fn classify_instruction(instruction_name: &str, _signature: &str) -> Option<GovernanceEvent> {
     match instruction_name {
         "ProposalCreate" => Some(GovernanceEvent::ProposalCreated {
