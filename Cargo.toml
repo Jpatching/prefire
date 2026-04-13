@@ -14,6 +14,8 @@ prefire-enrichment = { path = "crates/enrichment" }
 prefire-scoring = { path = "crates/scoring" }
 prefire-alerts = { path = "crates/alerts" }
 tokio = { version = "1", features = ["full"] }
+solana-client = "2"
+solana-sdk = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }

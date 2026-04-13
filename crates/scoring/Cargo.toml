@@ -8,3 +8,6 @@ description = "Stage 3: Signal combination + threat scoring"
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+prefire-enrichment = { path = "../enrichment" }
+prefire-monitor = { path = "../monitor" }
+solana-sdk = "2"

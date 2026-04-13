@@ -1,71 +1,53 @@
 use serde::Serialize;
 use solana_sdk::pubkey::Pubkey;
 
+/// What type of governance action was detected.
+/// The multisig address lives on MonitoredEvent, not here --
+/// classify_instruction doesn't have access to account keys.
 #[derive(Debug, Clone, Serialize)]
 pub enum GovernanceEvent {
-    ConfigChange {
-        multisig: Pubkey,
-        description: String,
-    },
-    VaultTransfer {
-        multisig: Pubkey,
-        description: String,
-    },
-    ProposalApproved {
-        multisig: Pubkey,
-        description: String,
-    },
-    ProposalActivated {
-        multisig: Pubkey,
-        description: String,
-    },
-    ProposalCreated {
-        multisig: Pubkey,
-        description: String,
-    },
+    ProposalCreated { description: String },
+    ProposalApproved { description: String },
+    ProposalActivated { description: String },
+    ConfigChange { description: String },
+    VaultTransfer { description: String },
 }
 
+/// A governance event with full transaction context.
+/// Live mode leaves signers/account_keys empty (backfilled in enrichment).
+/// Replay mode populates everything from getTransaction.
 #[derive(Serialize, Clone, Debug)]
 pub struct MonitoredEvent {
     pub signature: String,
+    pub slot: u64,
+    pub block_time: Option<i64>,
     pub event: GovernanceEvent,
+    pub multisig: Pubkey,
+    pub signers: Vec<Pubkey>,
+    pub account_keys: Vec<Pubkey>,
+    #[serde(skip)]
+    pub log_messages: Vec<String>,
 }
 
-pub fn classify_instruction(instruction_name: &str, _signature: &str) -> Option<GovernanceEvent> {
+pub fn classify_instruction(instruction_name: &str) -> Option<GovernanceEvent> {
     match instruction_name {
         "ProposalCreate" => Some(GovernanceEvent::ProposalCreated {
-            multisig: Pubkey::default(),
             description: instruction_name.to_string(),
         }),
         "ProposalApprove" => Some(GovernanceEvent::ProposalApproved {
-            multisig: Pubkey::default(),
             description: instruction_name.to_string(),
         }),
         "ProposalActivate" => Some(GovernanceEvent::ProposalActivated {
-            multisig: Pubkey::default(),
             description: instruction_name.to_string(),
         }),
-        "ConfigTransactionCreate" => Some(GovernanceEvent::ConfigChange {
-            multisig: Pubkey::default(),
+        "ConfigTransactionCreate" | "MultisigAddMember" => Some(GovernanceEvent::ConfigChange {
             description: instruction_name.to_string(),
         }),
-        "MultisigAddMember" => Some(GovernanceEvent::ConfigChange {
-            multisig: Pubkey::default(),
-            description: instruction_name.to_string(),
-        }),
-        "VaultTransactionCreate" => Some(GovernanceEvent::VaultTransfer {
-            multisig: Pubkey::default(),
-            description: instruction_name.to_string(),
-        }),
-        "VaultTransactionExecute" => Some(GovernanceEvent::VaultTransfer {
-            multisig: Pubkey::default(),
-            description: instruction_name.to_string(),
-        }),
-        "SpendingLimitUse" => Some(GovernanceEvent::VaultTransfer {
-            multisig: Pubkey::default(),
-            description: instruction_name.to_string(),
-        }),
-
+        "VaultTransactionCreate" | "VaultTransactionExecute" | "SpendingLimitUse" => {
+            Some(GovernanceEvent::VaultTransfer {
+                description: instruction_name.to_string(),
+            })
+        }
         _ => None,
     }
 }

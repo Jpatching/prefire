@@ -14,3 +14,4 @@ serde_json = "1"
 prefire-monitor = { path = "../monitor" }
 solana-transaction-status-client-types = "2"
 thiserror = "2"
+borsh = "1"

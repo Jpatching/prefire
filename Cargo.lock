@@ -2483,6 +2483,8 @@ dependencies = [
  "prefire-scoring",
  "serde",
  "serde_json",
+ "solana-client",
+ "solana-sdk",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2503,6 +2505,7 @@ dependencies = [
 name = "prefire-enrichment"
 version = "0.1.0"
 dependencies = [
+ "borsh 1.6.1",
  "prefire-monitor",
  "serde",
  "serde_json",
@@ -2523,6 +2526,7 @@ dependencies = [
  "serde_json",
  "solana-client",
  "solana-sdk",
+ "solana-transaction-status-client-types",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2532,8 +2536,11 @@ dependencies = [
 name = "prefire-scoring"
 version = "0.1.0"
 dependencies = [
+ "prefire-enrichment",
+ "prefire-monitor",
  "serde",
  "serde_json",
+ "solana-sdk",
  "tracing",
 ]
 
