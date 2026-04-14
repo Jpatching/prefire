@@ -28,3 +28,36 @@ pub fn uses_durable_nonce(log_messages: &[String], account_keys: &[Pubkey]) -> b
         .iter()
         .any(|line| line.contains("AdvanceNonceAccount"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_nonce_from_sysvar_in_account_keys() {
+        // The RecentBlockhashes sysvar is ONLY present when AdvanceNonceAccount
+        // is called. If it's in account_keys, a durable nonce is being used.
+        let sysvar = Pubkey::from_str(RECENT_BLOCKHASHES_SYSVAR).unwrap();
+        let keys = vec![Pubkey::new_unique(), sysvar, Pubkey::new_unique()];
+        assert!(uses_durable_nonce(&[], &keys));
+    }
+
+    #[test]
+    fn no_false_positive_without_sysvar() {
+        // Normal transaction: no RecentBlockhashes sysvar, no nonce log.
+        let keys = vec![Pubkey::new_unique(), Pubkey::new_unique()];
+        assert!(!uses_durable_nonce(&[], &keys));
+    }
+
+    #[test]
+    fn detects_nonce_from_log_fallback() {
+        // Even if sysvar isn't in keys, the log message fallback works.
+        let logs = vec!["Program log: AdvanceNonceAccount".to_string()];
+        assert!(uses_durable_nonce(&logs, &[]));
+    }
+
+    #[test]
+    fn empty_inputs_return_false() {
+        assert!(!uses_durable_nonce(&[], &[]));
+    }
+}

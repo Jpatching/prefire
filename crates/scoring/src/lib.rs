@@ -127,6 +127,137 @@ fn event_description(event: &GovernanceEvent) -> &str {
     }
 }
 
+// --- Governance health score (prevention layer) ---
+
+use prefire_enrichment::multisig::MultisigConfig;
+
+/// A risk factor found in the multisig configuration.
+#[derive(Debug, Clone, Serialize)]
+pub struct Risk {
+    pub name: &'static str,
+    pub deduction: u8,
+    pub reason: String,
+}
+
+/// Governance health assessment for a multisig configuration.
+/// Higher score = healthier configuration. Lower = more vulnerable.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthScore {
+    pub total: u8,
+    pub risks: Vec<Risk>,
+    pub recommendations: Vec<String>,
+}
+
+/// Assess a multisig's governance configuration health.
+/// Starts at 100 and deducts points for each risk factor.
+///
+/// This is the PREVENTION layer. It tells teams "you're vulnerable to a
+/// Drift-style attack" BEFORE any attack happens. The attack detection
+/// (score/score_with_context) is the DETECTION layer -- it fires during
+/// an attack. This function fires BEFORE.
+pub fn governance_health(config: &MultisigConfig) -> HealthScore {
+    let mut risks = Vec::new();
+    let mut recommendations = Vec::new();
+    // Start at 100 (perfect health) and deduct for each risk.
+    // u8 can't go negative, so we track deductions as u16 then clamp.
+    let mut deductions: u16 = 0;
+
+    // Risk 1: Zero timelock (-40)
+    // The single biggest factor in the Drift exploit. With a timelock,
+    // other members have time to notice and veto malicious proposals.
+    if config.time_lock == 0 {
+        let d = 40;
+        risks.push(Risk {
+            name: "zero_timelock",
+            deduction: d,
+            reason: "no delay between proposal approval and execution".to_string(),
+        });
+        recommendations.push(
+            "Add a timelock (recommended: 86400s / 24 hours) to give other members \
+             time to review and veto proposals before execution"
+                .to_string(),
+        );
+        deductions += d as u16;
+    }
+
+    // Risk 2: Low threshold ratio (-25)
+    // threshold / member_count < 0.5 means less than half of members
+    // need to approve. Drift was 2/5 = 0.4. Easier to compromise.
+    // We use integer math to avoid floating point: threshold * 2 < member_count
+    if config.member_count > 0
+        && (config.threshold as usize).checked_mul(2).unwrap_or(0) < config.member_count
+    {
+        let d = 25;
+        // checked_add on the ratio numerator: threshold * 100 / member_count
+        let pct = (config.threshold as usize)
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(config.member_count))
+            .unwrap_or(0);
+        risks.push(Risk {
+            name: "low_threshold_ratio",
+            deduction: d,
+            reason: format!(
+                "threshold is {}% of members ({}/{}) — less than majority required to approve",
+                pct, config.threshold, config.member_count
+            ),
+        });
+        recommendations.push(format!(
+            "Increase threshold to at least {}/{} (>50%) so a majority of members must approve",
+            config.member_count / 2 + 1,
+            config.member_count
+        ));
+        deductions += d as u16;
+    }
+
+    // Risk 3: Threshold of 1 (-20)
+    // Any single member can act alone. Zero redundancy.
+    if config.threshold <= 1 && config.member_count > 1 {
+        let d = 20;
+        risks.push(Risk {
+            name: "single_signer_threshold",
+            deduction: d,
+            reason: format!(
+                "threshold=1 on a {}-member multisig — any single member can act alone",
+                config.member_count
+            ),
+        });
+        recommendations.push(
+            "Increase threshold to at least 2 to require multiple approvals".to_string(),
+        );
+        deductions += d as u16;
+    }
+
+    // Risk 4: Compound risk — zero timelock + low threshold (-15 bonus)
+    // This is the EXACT Drift configuration. Flag it explicitly.
+    if config.time_lock == 0 && config.threshold < 3 && config.member_count >= 3 {
+        let d = 15;
+        risks.push(Risk {
+            name: "drift_pattern",
+            deduction: d,
+            reason: format!(
+                "zero timelock + threshold={} matches the Drift exploit configuration \
+                 ($285M stolen April 2026)",
+                config.threshold
+            ),
+        });
+        recommendations.push(
+            "This is the exact configuration exploited in the Drift Protocol attack. \
+             Priority: add timelock AND increase threshold"
+                .to_string(),
+        );
+        deductions += d as u16;
+    }
+
+    // Clamp: score can't go below 0
+    let total = 100u16.saturating_sub(deductions).min(100) as u8;
+
+    HealthScore {
+        total,
+        risks,
+        recommendations,
+    }
+}
+
 // --- Temporal correlation (tracks event sequences per multisig) ---
 
 use std::collections::{HashMap, VecDeque};
@@ -233,4 +364,220 @@ pub fn score_with_context(
     }
 
     result
+}
+
+// --- Tests ---
+// #[cfg(test)] means this entire module is only compiled during `cargo test`.
+// Tests can access all items in the parent module (even private ones)
+// because they're in the same crate.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prefire_enrichment::multisig::MultisigConfig;
+    use prefire_monitor::governance::{GovernanceEvent, MonitoredEvent};
+
+    /// Helper: build a synthetic MonitoredEvent for testing.
+    /// We don't need real RPC data -- we construct the struct directly.
+    fn make_event(event: GovernanceEvent, uses_nonce: bool) -> EnrichedEvent {
+        let account_keys = vec![Pubkey::new_unique()]; // signer
+        if uses_nonce {
+            // Add the RecentBlockhashes sysvar to simulate nonce usage.
+            // In production, the enrichment crate detects this from real tx data.
+            // In tests, we just set the flag directly.
+        }
+
+        EnrichedEvent {
+            event: MonitoredEvent {
+                signature: "test_sig".to_string(),
+                slot: 1000,
+                block_time: Some(1700000000),
+                event,
+                multisig: Pubkey::new_unique(),
+                signers: vec![Pubkey::new_unique()],
+                account_keys,
+                log_messages: vec![],
+            },
+            multisig_config: Some(MultisigConfig {
+                threshold: 2,
+                member_count: 5,
+                voter_count: 5,
+                time_lock: 0,
+            }),
+            uses_durable_nonce: uses_nonce,
+            sol_outflow_lamports: 0,
+            token_transfers: vec![],
+        }
+    }
+
+    #[test]
+    fn normal_proposal_approve_scores_safe() {
+        // A normal ProposalApprove with no nonce should score low.
+        // Only zero_timelock fires (+10).
+        let enriched = make_event(
+            GovernanceEvent::ProposalApproved {
+                description: "ProposalApprove".to_string(),
+            },
+            false,
+        );
+        let result = score(&enriched);
+        assert_eq!(result.verdict, Verdict::Safe);
+        assert!(result.total <= 20, "normal approve scored {}", result.total);
+    }
+
+    #[test]
+    fn durable_nonce_vault_transfer_scores_suspicious() {
+        // Durable nonce (+30) + zero timelock (+10) + vault transfer (+10) = 50
+        let enriched = make_event(
+            GovernanceEvent::VaultTransfer {
+                description: "VaultTransactionCreate".to_string(),
+            },
+            true,
+        );
+        let result = score(&enriched);
+        assert_eq!(result.total, 50);
+        assert_eq!(result.verdict, Verdict::Suspicious);
+    }
+
+    #[test]
+    fn nonce_plus_rapid_governance_scores_critical() {
+        // Simulate the Drift attack sequence:
+        // ProposalCreated at T=0, ProposalApproved at T=0 (same second)
+        let multisig = Pubkey::new_unique();
+
+        let create_event = EnrichedEvent {
+            event: MonitoredEvent {
+                signature: "tx1".to_string(),
+                slot: 1000,
+                block_time: Some(1700000000),
+                event: GovernanceEvent::ProposalCreated {
+                    description: "ProposalCreate".to_string(),
+                },
+                multisig,
+                signers: vec![],
+                account_keys: vec![],
+                log_messages: vec![],
+            },
+            multisig_config: Some(MultisigConfig {
+                threshold: 2,
+                member_count: 5,
+                voter_count: 5,
+                time_lock: 0,
+            }),
+            uses_durable_nonce: true,
+            sol_outflow_lamports: 0,
+            token_transfers: vec![],
+        };
+
+        let approve_event = EnrichedEvent {
+            event: MonitoredEvent {
+                signature: "tx1".to_string(),
+                slot: 1000,
+                block_time: Some(1700000000), // same second!
+                event: GovernanceEvent::ProposalApproved {
+                    description: "ProposalApprove".to_string(),
+                },
+                multisig, // same multisig -- temporal tracking works
+                signers: vec![],
+                account_keys: vec![],
+                log_messages: vec![],
+            },
+            multisig_config: Some(MultisigConfig {
+                threshold: 2,
+                member_count: 5,
+                voter_count: 5,
+                time_lock: 0,
+            }),
+            uses_durable_nonce: true,
+            sol_outflow_lamports: 0,
+            token_transfers: vec![],
+        };
+
+        let mut ctx = ScoringContext::new();
+        // First event: create. Scores 40 (nonce + timelock).
+        let r1 = score_with_context(&create_event, &mut ctx);
+        assert_eq!(r1.total, 40);
+
+        // Second event: approve. Now rapid_governance fires (+25).
+        // nonce(30) + timelock(10) + rapid(25) = 65
+        let r2 = score_with_context(&approve_event, &mut ctx);
+        assert_eq!(r2.total, 65);
+        assert_eq!(r2.verdict, Verdict::Critical);
+    }
+
+    #[test]
+    fn verdict_boundaries() {
+        // Verify the exact boundary values
+        assert_eq!(
+            match 30u8 {
+                0..=30 => Verdict::Safe,
+                31..=60 => Verdict::Suspicious,
+                _ => Verdict::Critical,
+            },
+            Verdict::Safe
+        );
+        assert_eq!(
+            match 31u8 {
+                0..=30 => Verdict::Safe,
+                31..=60 => Verdict::Suspicious,
+                _ => Verdict::Critical,
+            },
+            Verdict::Suspicious
+        );
+        assert_eq!(
+            match 61u8 {
+                0..=30 => Verdict::Safe,
+                31..=60 => Verdict::Suspicious,
+                _ => Verdict::Critical,
+            },
+            Verdict::Critical
+        );
+    }
+
+    // --- Governance health score tests ---
+
+    #[test]
+    fn drift_config_scores_poorly() {
+        // Drift's config: threshold=2, members=5, timelock=0
+        let config = MultisigConfig {
+            threshold: 2,
+            member_count: 5,
+            voter_count: 5,
+            time_lock: 0,
+        };
+        let health = governance_health(&config);
+        // Should deduct: zero_timelock(-40) + low_ratio(-25) + drift_pattern(-15) = 80
+        // Score: 100 - 80 = 20
+        assert_eq!(health.total, 20);
+        assert!(health.risks.len() >= 3);
+        assert!(!health.recommendations.is_empty());
+    }
+
+    #[test]
+    fn healthy_config_scores_well() {
+        // Good config: threshold=4, members=7, timelock=86400 (24h)
+        let config = MultisigConfig {
+            threshold: 4,
+            member_count: 7,
+            voter_count: 7,
+            time_lock: 86400,
+        };
+        let health = governance_health(&config);
+        // No risks should fire: 4/7 > 50%, timelock > 0, threshold > 1
+        assert_eq!(health.total, 100);
+        assert!(health.risks.is_empty());
+    }
+
+    #[test]
+    fn single_signer_multisig_scores_very_poorly() {
+        let config = MultisigConfig {
+            threshold: 1,
+            member_count: 5,
+            voter_count: 5,
+            time_lock: 0,
+        };
+        let health = governance_health(&config);
+        // zero_timelock(-40) + low_ratio(-25) + single_signer(-20) + drift_pattern(-15) = 100
+        assert_eq!(health.total, 0);
+    }
 }

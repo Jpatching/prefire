@@ -7,6 +7,7 @@ use solana_client::rpc_filter::{Memcmp, RpcFilterType};
 use solana_sdk::pubkey::Pubkey;
 
 use prefire_enrichment::multisig::{fetch_multisig_config, MultisigConfig};
+use prefire_scoring::governance_health;
 
 const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 const NONCE_ACCOUNT_SIZE: u64 = 80;
@@ -135,6 +136,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else {
             println!("  OK: No members have active nonce accounts.");
+        }
+
+        // Governance health score -- assess the configuration itself
+        let health = governance_health(&config);
+        let health_marker = match health.total {
+            80..=100 => "HEALTHY",
+            50..=79 => "AT RISK",
+            _ => "VULNERABLE",
+        };
+        println!("\n  GOVERNANCE HEALTH: {}/100 — {}", health.total, health_marker);
+        for risk in &health.risks {
+            println!("    -{} {}: {}", risk.deduction, risk.name, risk.reason);
+        }
+        if !health.recommendations.is_empty() {
+            println!("\n  Recommendations:");
+            for rec in &health.recommendations {
+                println!("    * {}", rec);
+            }
         }
 
         println!();
