@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prefire — Solana Governance Attack Detection</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; padding: 2rem; }
+  h1 { color: #ff6b35; margin-bottom: 0.5rem; font-size: 1.6rem; }
+  h2 { color: #888; font-size: 1rem; margin-bottom: 2rem; font-weight: normal; }
+  h3 { color: #ff6b35; margin: 2rem 0 1rem; font-size: 1.1rem; }
+  .stats { display: flex; gap: 1.5rem; margin-bottom: 2rem; flex-wrap: wrap; }
+  .stat { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 1rem 1.5rem; min-width: 180px; }
+  .stat-value { font-size: 1.8rem; font-weight: bold; color: #ff6b35; }
+  .stat-label { color: #888; font-size: 0.8rem; margin-top: 0.3rem; }
+  .section { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  input, button { font-family: inherit; font-size: 0.9rem; padding: 0.6rem 1rem; border-radius: 4px; border: 1px solid #444; background: #222; color: #e0e0e0; }
+  input { width: 500px; max-width: 100%; }
+  button { background: #ff6b35; color: #fff; border: none; cursor: pointer; margin-left: 0.5rem; }
+  button:hover { background: #e05a2a; }
+  button:disabled { background: #555; cursor: wait; }
+  .result { margin-top: 1rem; white-space: pre-wrap; font-size: 0.85rem; line-height: 1.6; }
+  .safe { color: #2ecc71; }
+  .suspicious { color: #f39c12; }
+  .critical { color: #e74c3c; font-weight: bold; }
+  .nonce-yes { color: #e74c3c; font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 1px solid #222; }
+  th { color: #888; font-weight: normal; text-transform: uppercase; font-size: 0.75rem; }
+  .tag { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; }
+  .tag-safe { background: #1a3a2a; color: #2ecc71; }
+  .tag-suspicious { background: #3a2a1a; color: #f39c12; }
+  .tag-critical { background: #3a1a1a; color: #e74c3c; }
+  .tag-ok { background: #1a3a2a; color: #2ecc71; }
+  .tag-warning { background: #3a2a1a; color: #f39c12; }
+  .mono { font-family: inherit; font-size: 0.8rem; color: #aaa; }
+  .loading { color: #888; }
+</style>
+</head>
+<body>
+
+<h1>PREFIRE</h1>
+<h2>Solana Governance Attack Detection — Passive, Permissionless, Real-Time</h2>
+
+<div class="stats" id="stats">
+  <div class="stat"><div class="stat-value" id="stat-multisigs">—</div><div class="stat-label">Multisigs on Mainnet</div></div>
+  <div class="stat"><div class="stat-value" id="stat-zero-tl">—</div><div class="stat-label">Zero Timelock (threshold &ge;2)</div></div>
+  <div class="stat"><div class="stat-value" id="stat-exploits">—</div><div class="stat-label">Known Exploits Detected</div></div>
+</div>
+
+<div class="section">
+  <h3>Scan Multisig</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Enter a Squads v4 multisig address to scan members for durable nonce accounts.</p>
+  <input id="scan-input" placeholder="Multisig address (e.g. 2LW6PSEjp81xSEtt...)" />
+  <button id="scan-btn" onclick="runScan()">Scan</button>
+  <div class="result" id="scan-result"></div>
+</div>
+
+<div class="section">
+  <h3>Replay Transaction</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Enter a transaction signature to replay through the detection pipeline.</p>
+  <input id="replay-input" placeholder="Transaction signature" />
+  <button id="replay-btn" onclick="runReplay()">Replay</button>
+  <div class="result" id="replay-result"></div>
+</div>
+
+<div class="section">
+  <h3>About</h3>
+  <p style="color:#888;font-size:0.85rem;line-height:1.6;">
+    Prefire detects governance attack patterns by combining multiple weak signals into strong threat assessments.
+    Built for the Colosseum Frontier hackathon. Validated against the $285M Drift Protocol exploit (April 2026).
+    <br><br>
+    <strong style="color:#e0e0e0;">Signals:</strong> durable nonce (30pts) | rapid governance (25pts) | config change (15pts) | zero timelock (10pts) | vault transfer (10pts)
+    <br>
+    <strong style="color:#e0e0e0;">Verdicts:</strong> <span class="safe">SAFE (0-30)</span> | <span class="suspicious">SUSPICIOUS (31-60)</span> | <span class="critical">CRITICAL (61-100)</span>
+  </p>
+</div>
+
+<script>
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    document.getElementById('stat-multisigs').textContent = d.total_multisigs_on_mainnet.toLocaleString();
+    document.getElementById('stat-zero-tl').textContent = d.zero_timelock_with_threshold_gte_2.toLocaleString();
+    document.getElementById('stat-exploits').textContent = d.known_exploits_detected;
+  } catch(e) { console.error(e); }
+}
+
+async function runScan() {
+  const addr = document.getElementById('scan-input').value.trim();
+  if (!addr) return;
+  const btn = document.getElementById('scan-btn');
+  const out = document.getElementById('scan-result');
+  btn.disabled = true; btn.textContent = 'Scanning...';
+  out.innerHTML = '<span class="loading">Fetching multisig config and scanning members...</span>';
+  try {
+    const r = await fetch('/api/scan/' + addr);
+    if (!r.ok) { out.textContent = 'Error: ' + r.status; return; }
+    const d = await r.json();
+    let html = `<strong>Multisig:</strong> ${d.address}\n`;
+    html += `<strong>Config:</strong> threshold=${d.threshold}/${d.member_count} members (${d.voter_count} voters) | time_lock=${d.time_lock}s\n\n`;
+    html += `<table><tr><th>Member</th><th>Permissions</th><th>Nonce Accounts</th></tr>`;
+    for (const m of d.members) {
+      const perms = (m.can_vote ? 'Vote ' : '') + (m.can_execute ? 'Execute' : '');
+      const nonce = m.nonce_accounts > 0
+        ? `<span class="nonce-yes">${m.nonce_accounts} !!!</span>`
+        : '0';
+      html += `<tr><td class="mono">${m.key}</td><td>${perms}</td><td>${nonce}</td></tr>`;
+    }
+    html += '</table>\n\n';
+    const risk = d.nonce_summary.risk_level;
+    const tagClass = risk === 'CRITICAL' ? 'tag-critical' : risk === 'WARNING' ? 'tag-warning' : 'tag-ok';
+    html += `<strong>Risk:</strong> <span class="tag ${tagClass}">${risk}</span>`;
+    if (d.nonce_summary.total_nonce_accounts > 0) {
+      html += ` — ${d.nonce_summary.members_with_nonces} member(s) with ${d.nonce_summary.total_nonce_accounts} nonce accounts`;
+    }
+    out.innerHTML = html;
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Scan'; }
+}
+
+async function runReplay() {
+  const sig = document.getElementById('replay-input').value.trim();
+  if (!sig) return;
+  const btn = document.getElementById('replay-btn');
+  const out = document.getElementById('replay-result');
+  btn.disabled = true; btn.textContent = 'Replaying...';
+  out.innerHTML = '<span class="loading">Fetching transaction and running detection pipeline...</span>';
+  try {
+    const r = await fetch('/api/replay/' + sig);
+    if (!r.ok) { out.textContent = 'Error: ' + r.status; return; }
+    const d = await r.json();
+    if (!d.events.length) { out.textContent = 'No governance events found in this transaction.'; return; }
+    let html = `<table><tr><th>Event</th><th>Score</th><th>Verdict</th><th>Nonce</th><th>Signals</th></tr>`;
+    for (const e of d.events) {
+      const verdictClass = e.verdict === 'Critical' ? 'critical' : e.verdict === 'Suspicious' ? 'suspicious' : 'safe';
+      const tagClass = e.verdict === 'Critical' ? 'tag-critical' : e.verdict === 'Suspicious' ? 'tag-suspicious' : 'tag-safe';
+      const signals = e.signals.map(s => `+${s.score} ${s.name}`).join(', ');
+      const nonce = e.uses_durable_nonce ? '<span class="nonce-yes">YES</span>' : '';
+      const eventShort = e.event.length > 35 ? e.event.substring(0, 35) + '...' : e.event;
+      html += `<tr>
+        <td>${eventShort}</td>
+        <td class="${verdictClass}">${e.score}/100</td>
+        <td><span class="tag ${tagClass}">${e.verdict.toUpperCase()}</span></td>
+        <td>${nonce}</td>
+        <td class="mono">${signals}</td>
+      </tr>`;
+    }
+    html += '</table>';
+    out.innerHTML = html;
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Replay'; }
+}
+
+loadStats();
+</script>
+</body>
+</html>
