@@ -15,3 +15,6 @@ prefire-monitor = { path = "../monitor" }
 solana-transaction-status-client-types = "2"
 thiserror = "2"
 borsh = "1"
+
+[dev-dependencies]
+tempfile = "3"

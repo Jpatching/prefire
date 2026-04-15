@@ -1,5 +1,6 @@
 pub mod multisig;
 pub mod nonce;
+pub mod snapshot;
 pub mod token;
 
 use std::str::FromStr;
@@ -13,7 +14,7 @@ use thiserror::Error;
 use prefire_monitor::governance::MonitoredEvent;
 use prefire_monitor::rpc::SQUADS_PROGRAM_ID;
 
-use crate::multisig::{MultisigConfig, MultisigError};
+use crate::multisig::{ConfigDelta, MultisigConfig, MultisigError};
 use crate::token::TokenTransferInfo;
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +24,11 @@ pub struct EnrichedEvent {
     pub uses_durable_nonce: bool,
     pub sol_outflow_lamports: i128,
     pub token_transfers: Vec<TokenTransferInfo>,
+    /// Set when a ConfigChange event is detected and we can compare to previous config.
+    pub config_delta: Option<ConfigDelta>,
+    /// True when members with nonce accounts >= multisig threshold.
+    /// Only populated when nonce scanning is performed (health/scan paths).
+    pub nonce_threshold_met: bool,
 }
 
 #[derive(Debug, Error)]
@@ -63,8 +69,45 @@ pub async fn enrich(
         None => None,
     };
 
-    let sol_outflow_lamports = 0;
-    let token_transfers = vec![];
+    // Extract SOL and token outflows from pre/post balance data.
+    // Only populated when replaying historical transactions (live mode has empty vecs).
+    let sol_outflow_lamports = token::sol_outflow_lamports(
+        &event.pre_balances,
+        &event.post_balances,
+    );
+    let token_transfers = token::extract_token_transfers(
+        &event.pre_token_balances,
+        &event.post_token_balances,
+    );
+
+    // Compute config delta for ConfigChange events by comparing to stored snapshot.
+    // This detects threshold lowered, timelock removed, etc.
+    let config_delta = if matches!(
+        event.event,
+        prefire_monitor::governance::GovernanceEvent::ConfigChange { .. }
+    ) {
+        if let (Some(ref new_config), multisig) = (&multisig_config, event.multisig) {
+            if multisig != Pubkey::default() {
+                let previous = snapshot::load_snapshot(&multisig);
+                // Save new snapshot for next comparison
+                let _ = snapshot::save_snapshot(&multisig, new_config);
+                previous.map(|old| ConfigDelta::compare(&old, new_config))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        // For non-ConfigChange events, still update the snapshot if we have
+        // a resolved multisig so the baseline stays current.
+        if let Some(ref config) = multisig_config {
+            if event.multisig != Pubkey::default() {
+                let _ = snapshot::save_snapshot(&event.multisig, config);
+            }
+        }
+        None
+    };
 
     Ok(EnrichedEvent {
         event,
@@ -72,7 +115,45 @@ pub async fn enrich(
         uses_durable_nonce,
         sol_outflow_lamports,
         token_transfers,
+        config_delta,
+        nonce_threshold_met: false,
     })
+}
+
+/// Full enrichment: everything in `enrich()` plus nonce account scanning.
+///
+/// This scans every multisig member for durable nonce accounts (one RPC call
+/// per member) to determine whether nonce holders can meet the signing
+/// threshold. Use this for replay, API, and health paths where thoroughness
+/// matters. Use `enrich()` for the live WebSocket pipeline where speed matters.
+pub async fn enrich_full(
+    rpc: &Arc<RpcClient>,
+    event: MonitoredEvent,
+) -> Result<EnrichedEvent, EnrichmentError> {
+    let mut enriched = enrich(rpc, event).await?;
+
+    // Scan member nonce accounts if we resolved a multisig
+    if let Some(ref config) = enriched.multisig_config {
+        if enriched.event.multisig != Pubkey::default() {
+            if let Ok(account) =
+                multisig::fetch_multisig_config(rpc, &enriched.event.multisig).await
+            {
+                let mut members_with_nonces = 0usize;
+                for member in &account.members {
+                    let nonces = nonce::fetch_nonce_accounts(rpc, &member.key)
+                        .await
+                        .unwrap_or_default();
+                    if !nonces.is_empty() {
+                        members_with_nonces += 1;
+                    }
+                }
+                enriched.nonce_threshold_met =
+                    members_with_nonces >= config.threshold as usize;
+            }
+        }
+    }
+
+    Ok(enriched)
 }
 
 /// Find the Squads multisig account from the transaction's account keys.

@@ -36,6 +36,19 @@
   .tag-warning { background: #3a2a1a; color: #f39c12; }
   .mono { font-family: inherit; font-size: 0.8rem; color: #aaa; }
   .loading { color: #888; }
+  .health-bar { height: 8px; border-radius: 4px; background: #333; margin: 0.5rem 0; }
+  .health-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .health-score { font-size: 2.2rem; font-weight: bold; }
+  .health-label { font-size: 0.9rem; margin-left: 0.5rem; }
+  .risk-item { padding: 0.5rem 0; border-bottom: 1px solid #222; }
+  .risk-deduction { color: #e74c3c; font-weight: bold; min-width: 3rem; display: inline-block; }
+  .risk-name { color: #f39c12; min-width: 10rem; display: inline-block; }
+  .rec-list { list-style: none; padding: 0; }
+  .rec-list li { padding: 0.4rem 0; padding-left: 1.2rem; position: relative; color: #ccc; font-size: 0.85rem; line-height: 1.5; }
+  .rec-list li::before { content: "*"; position: absolute; left: 0; color: #ff6b35; }
+  .drift-compare { display: flex; gap: 2rem; margin-top: 1rem; font-size: 0.85rem; }
+  .drift-col { flex: 1; background: #111; border-radius: 6px; padding: 0.8rem; }
+  .drift-col h4 { color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.5rem; }
 </style>
 </head>
 <body>
@@ -47,6 +60,14 @@
   <div class="stat"><div class="stat-value" id="stat-multisigs">—</div><div class="stat-label">Multisigs on Mainnet</div></div>
   <div class="stat"><div class="stat-value" id="stat-zero-tl">—</div><div class="stat-label">Zero Timelock (threshold &ge;2)</div></div>
   <div class="stat"><div class="stat-value" id="stat-exploits">—</div><div class="stat-label">Known Exploits Detected</div></div>
+</div>
+
+<div class="section">
+  <h3>Governance Health Check</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Full risk assessment: configuration health, nonce surveillance, and actionable recommendations.</p>
+  <input id="health-input" placeholder="Multisig address (e.g. 2LW6PSEjp81xSEtt...)" />
+  <button id="health-btn" onclick="runHealth()">Assess</button>
+  <div class="result" id="health-result"></div>
 </div>
 
 <div class="section">
@@ -152,6 +173,94 @@ async function runReplay() {
     out.innerHTML = html;
   } catch(e) { out.textContent = 'Error: ' + e.message; }
   finally { btn.disabled = false; btn.textContent = 'Replay'; }
+}
+
+async function runHealth() {
+  const addr = document.getElementById('health-input').value.trim();
+  if (!addr) return;
+  const btn = document.getElementById('health-btn');
+  const out = document.getElementById('health-result');
+  btn.disabled = true; btn.textContent = 'Assessing...';
+  out.innerHTML = '<span class="loading">Fetching config, scanning nonce accounts, computing health score...</span>';
+  try {
+    const r = await fetch('/api/health/' + addr);
+    if (!r.ok) { out.textContent = 'Error: ' + r.status + (r.status === 404 ? ' — not a valid Squads v4 multisig' : ''); return; }
+    const d = await r.json();
+
+    // Health score color
+    const scoreColor = d.health_score >= 80 ? '#2ecc71' : d.health_score >= 50 ? '#f39c12' : '#e74c3c';
+    const labelClass = d.health_label === 'HEALTHY' ? 'safe' : d.health_label === 'AT RISK' ? 'suspicious' : 'critical';
+
+    let html = '';
+
+    // Score header
+    html += `<div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.5rem;">`;
+    html += `<span class="health-score" style="color:${scoreColor}">${d.health_score}</span>`;
+    html += `<span style="color:#888;font-size:1.2rem;">/100</span>`;
+    html += `<span class="health-label ${labelClass}">${d.health_label}</span>`;
+    html += `</div>`;
+
+    // Health bar
+    html += `<div class="health-bar"><div class="health-fill" style="width:${d.health_score}%;background:${scoreColor};"></div></div>`;
+
+    // Config summary
+    html += `<p style="margin:0.8rem 0;color:#aaa;font-size:0.85rem;">`;
+    html += `threshold=${d.config.threshold}/${d.config.member_count} members`;
+    html += ` (${d.config.voter_count} voters) | time_lock=${d.config.time_lock}s</p>`;
+
+    // Risks
+    if (d.risks.length > 0) {
+      html += `<h3 style="margin:1rem 0 0.5rem;font-size:0.9rem;">Risk Factors</h3>`;
+      for (const risk of d.risks) {
+        html += `<div class="risk-item">`;
+        html += `<span class="risk-deduction">-${risk.deduction}</span>`;
+        html += `<span class="risk-name">${risk.name}</span>`;
+        html += `<span style="color:#aaa;font-size:0.85rem;">${risk.reason}</span>`;
+        html += `</div>`;
+      }
+    }
+
+    // Nonce summary
+    const ns = d.nonce_summary;
+    const nonceTagClass = ns.risk_level === 'CRITICAL' ? 'tag-critical' : ns.risk_level === 'WARNING' ? 'tag-warning' : 'tag-ok';
+    html += `<h3 style="margin:1rem 0 0.5rem;font-size:0.9rem;">Nonce Surveillance</h3>`;
+    html += `<span class="tag ${nonceTagClass}">${ns.risk_level}</span>`;
+    html += ` <span style="color:#aaa;font-size:0.85rem;">${ns.members_with_nonces} member(s) with ${ns.total_nonce_accounts} nonce account(s)</span>`;
+
+    // Members table
+    html += `<table style="margin-top:0.8rem;"><tr><th>Member</th><th>Permissions</th><th>Nonces</th></tr>`;
+    for (const m of d.members) {
+      const nonce = m.nonce_accounts > 0
+        ? `<span class="nonce-yes">${m.nonce_accounts} !!!</span>`
+        : '0';
+      html += `<tr><td class="mono">${m.key}</td><td>${m.permissions}</td><td>${nonce}</td></tr>`;
+    }
+    html += '</table>';
+
+    // Recommendations
+    if (d.recommendations.length > 0) {
+      html += `<h3 style="margin:1rem 0 0.5rem;font-size:0.9rem;">Recommendations</h3>`;
+      html += `<ul class="rec-list">`;
+      for (const rec of d.recommendations) {
+        html += `<li>${rec}</li>`;
+      }
+      html += '</ul>';
+    }
+
+    // Drift comparison
+    html += `<div class="drift-compare">`;
+    html += `<div class="drift-col"><h4>Your Config</h4>`;
+    html += `threshold: ${d.drift_comparison.your_threshold}<br>`;
+    html += `timelock: ${d.config.time_lock}s</div>`;
+    html += `<div class="drift-col"><h4>Drift at Time of Exploit</h4>`;
+    html += `threshold: ${d.drift_comparison.drift_threshold}<br>`;
+    html += `timelock: ${d.drift_comparison.drift_timelock}s<br>`;
+    html += `<span style="color:#e74c3c;">health: ${d.drift_comparison.drift_health_score}/100</span></div>`;
+    html += `</div>`;
+
+    out.innerHTML = html;
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Assess'; }
 }
 
 loadStats();

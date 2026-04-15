@@ -2,17 +2,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_client::rpc_config::RpcProgramAccountsConfig;
-use solana_client::rpc_filter::{Memcmp, RpcFilterType};
 use solana_sdk::pubkey::Pubkey;
 
 use prefire_enrichment::multisig::{fetch_multisig_config, MultisigConfig};
+use prefire_enrichment::nonce::fetch_nonce_accounts;
 use prefire_scoring::governance_health;
 
-const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
-const NONCE_ACCOUNT_SIZE: u64 = 80;
-// In a nonce account: 4 bytes version + 4 bytes state + 32 bytes authority
-const NONCE_AUTHORITY_OFFSET: usize = 8;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,14 +80,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             // Scan for nonce accounts where this member is the authority
-            let nonce_count =
-                count_nonce_accounts(&rpc, &member.key).await.unwrap_or(0);
+            let nonce_addrs = fetch_nonce_accounts(&rpc, &member.key)
+                .await
+                .unwrap_or_default();
+            let nonce_count = nonce_addrs.len();
 
             let marker = if nonce_count > 0 { " !!!" } else { "" };
             println!(
                 "  [{}] {} — {} nonce accounts{}",
                 perms, member.key, nonce_count, marker
             );
+
+            // Show actual nonce account addresses so teams can inspect/advance them
+            for addr in &nonce_addrs {
+                println!("       nonce: {}", addr);
+            }
 
             if nonce_count > 0 {
                 members_with_nonces += 1;
@@ -134,6 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  RISK FACTOR: time_lock=0 — no delay between approval and execution"
                 );
             }
+
+            println!();
+            println!("  ACTION: Advance (invalidate) nonce accounts that are not actively needed.");
+            println!("  This revokes any pre-signed transactions using those nonces.");
+            println!("  Command: solana nonce-account advance <nonce_address> --nonce-authority <member_keypair>");
         } else {
             println!("  OK: No members have active nonce accounts.");
         }
@@ -173,28 +180,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Count durable nonce accounts where `authority` is the nonce authority.
-/// Uses getProgramAccounts with filters: dataSize=80 + memcmp at offset 8.
-async fn count_nonce_accounts(
-    rpc: &RpcClient,
-    authority: &Pubkey,
-) -> Result<usize, Box<dyn std::error::Error>> {
-    let system_program = Pubkey::from_str(SYSTEM_PROGRAM)?;
-
-    let config = RpcProgramAccountsConfig {
-        filters: Some(vec![
-            RpcFilterType::DataSize(NONCE_ACCOUNT_SIZE),
-            RpcFilterType::Memcmp(Memcmp::new_raw_bytes(
-                NONCE_AUTHORITY_OFFSET,
-                authority.to_bytes().to_vec(),
-            )),
-        ]),
-        ..Default::default()
-    };
-
-    let accounts = rpc
-        .get_program_accounts_with_config(&system_program, config)
-        .await?;
-
-    Ok(accounts.len())
-}

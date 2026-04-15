@@ -56,7 +56,7 @@ pub struct MultisigAccount {
 
 /// The subset of multisig config that scoring needs.
 /// Extracted from the full MultisigAccount to keep the scoring interface clean.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct MultisigConfig {
     pub threshold: u16,
     pub member_count: usize,
@@ -76,6 +76,54 @@ impl From<&MultisigAccount> for MultisigConfig {
                 .count(),
             time_lock: account.time_lock,
         }
+    }
+}
+
+/// Describes how a multisig config changed between two observed states.
+/// Used by the scoring engine to distinguish dangerous changes (threshold
+/// lowered, timelock removed) from benign or positive ones.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigDelta {
+    /// (old, new) if threshold changed
+    pub threshold_changed: Option<(u16, u16)>,
+    /// (old, new) if timelock changed
+    pub timelock_changed: Option<(u32, u32)>,
+    /// Number of members added
+    pub members_added: usize,
+    /// Number of members removed
+    pub members_removed: usize,
+}
+
+impl ConfigDelta {
+    /// Compare two configs and produce a delta.
+    pub fn compare(old: &MultisigConfig, new: &MultisigConfig) -> Self {
+        Self {
+            threshold_changed: if old.threshold != new.threshold {
+                Some((old.threshold, new.threshold))
+            } else {
+                None
+            },
+            timelock_changed: if old.time_lock != new.time_lock {
+                Some((old.time_lock, new.time_lock))
+            } else {
+                None
+            },
+            // We only have counts here, not actual member lists.
+            // member_count delta tells us net adds/removes.
+            members_added: new.member_count.saturating_sub(old.member_count),
+            members_removed: old.member_count.saturating_sub(new.member_count),
+        }
+    }
+
+    /// Returns true if any change made the config MORE vulnerable.
+    pub fn is_weakened(&self) -> bool {
+        let threshold_lowered = self
+            .threshold_changed
+            .map_or(false, |(old, new)| new < old);
+        let timelock_removed = self
+            .timelock_changed
+            .map_or(false, |(old, new)| new < old);
+        threshold_lowered || timelock_removed
     }
 }
 

@@ -1,4 +1,8 @@
 use std::str::FromStr;
+
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_client::rpc_config::RpcProgramAccountsConfig;
+use solana_client::rpc_filter::{Memcmp, RpcFilterType};
 use solana_sdk::pubkey::Pubkey;
 
 /// The RecentBlockhashes sysvar address. This sysvar is required by the
@@ -27,6 +31,37 @@ pub fn uses_durable_nonce(log_messages: &[String], account_keys: &[Pubkey]) -> b
     log_messages
         .iter()
         .any(|line| line.contains("AdvanceNonceAccount"))
+}
+
+const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+const NONCE_ACCOUNT_SIZE: u64 = 80;
+/// In a nonce account: 4 bytes version + 4 bytes state + 32 bytes authority
+const NONCE_AUTHORITY_OFFSET: usize = 8;
+
+/// Fetch the pubkeys of all durable nonce accounts where `authority` is the authority.
+/// Returns the account addresses (not the account data).
+pub async fn fetch_nonce_accounts(
+    rpc: &RpcClient,
+    authority: &Pubkey,
+) -> Result<Vec<Pubkey>, Box<dyn std::error::Error + Send + Sync>> {
+    let system_program = Pubkey::from_str(SYSTEM_PROGRAM)?;
+
+    let config = RpcProgramAccountsConfig {
+        filters: Some(vec![
+            RpcFilterType::DataSize(NONCE_ACCOUNT_SIZE),
+            RpcFilterType::Memcmp(Memcmp::new_raw_bytes(
+                NONCE_AUTHORITY_OFFSET,
+                authority.to_bytes().to_vec(),
+            )),
+        ]),
+        ..Default::default()
+    };
+
+    let accounts = rpc
+        .get_program_accounts_with_config(&system_program, config)
+        .await?;
+
+    Ok(accounts.into_iter().map(|(pubkey, _)| pubkey).collect())
 }
 
 #[cfg(test)]

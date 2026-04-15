@@ -7,9 +7,10 @@ use axum::routing::get;
 use axum::Router;
 use solana_client::nonblocking::rpc_client::RpcClient;
 
-use prefire_enrichment::enrich;
+use prefire_enrichment::{enrich_full};
 use prefire_enrichment::multisig::{fetch_multisig_config, MultisigConfig};
-use prefire_scoring::{score_with_context, ScoringContext};
+use prefire_enrichment::nonce::fetch_nonce_accounts;
+use prefire_scoring::{governance_health, score_with_context, ScoringContext};
 
 use tokio::sync::Mutex;
 
@@ -33,6 +34,7 @@ async fn main() {
         .route("/", get(dashboard))
         .route("/api/scan/{address}", get(api_scan))
         .route("/api/replay/{signature}", get(api_replay))
+        .route("/api/health/{address}", get(api_health))
         .route("/api/stats", get(api_stats))
         .with_state(state);
 
@@ -63,26 +65,28 @@ async fn api_scan(
     let config = MultisigConfig::from(&account);
 
     let mut members = Vec::new();
+    let mut members_with_nonces = 0usize;
+    let mut total_nonces = 0u64;
+
     for member in &account.members {
-        let nonce_count = count_nonce_accounts(&state.rpc, &member.key)
+        let nonce_addrs = fetch_nonce_accounts(&state.rpc, &member.key)
             .await
-            .unwrap_or(0);
+            .unwrap_or_default();
+        let nonce_count = nonce_addrs.len() as u64;
+
+        if nonce_count > 0 {
+            members_with_nonces += 1;
+            total_nonces += nonce_count;
+        }
+
         members.push(serde_json::json!({
             "key": member.key.to_string(),
             "can_vote": member.permissions.can_vote(),
             "can_execute": member.permissions.can_execute(),
             "nonce_accounts": nonce_count,
+            "nonce_account_addresses": nonce_addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
         }));
     }
-
-    let members_with_nonces = members
-        .iter()
-        .filter(|m| m["nonce_accounts"].as_u64().unwrap_or(0) > 0)
-        .count();
-    let total_nonces: u64 = members
-        .iter()
-        .map(|m| m["nonce_accounts"].as_u64().unwrap_or(0))
-        .sum();
 
     let risk = if members_with_nonces >= config.threshold as usize {
         "CRITICAL"
@@ -107,6 +111,116 @@ async fn api_scan(
     })))
 }
 
+/// Full governance health assessment for a multisig.
+/// Combines config risk scoring, nonce surveillance, and actionable recommendations.
+async fn api_health(
+    State(state): State<Arc<AppState>>,
+    Path(address): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let pubkey = address
+        .parse::<solana_sdk::pubkey::Pubkey>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let account = fetch_multisig_config(&state.rpc, &pubkey)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let config = MultisigConfig::from(&account);
+    let health = governance_health(&config);
+
+    let health_label = match health.total {
+        80..=100 => "HEALTHY",
+        50..=79 => "AT RISK",
+        _ => "VULNERABLE",
+    };
+
+    // Scan each member for nonce accounts -- return actual addresses, not just counts
+    let mut members = Vec::new();
+    let mut members_with_nonces: usize = 0;
+    let mut total_nonces: u64 = 0;
+
+    for member in &account.members {
+        let nonce_addrs = fetch_nonce_accounts(&state.rpc, &member.key)
+            .await
+            .unwrap_or_default();
+        let nonce_count = nonce_addrs.len() as u64;
+
+        if nonce_count > 0 {
+            members_with_nonces += 1;
+            total_nonces += nonce_count;
+        }
+
+        let perms = format!(
+            "{}{}{}",
+            if member.permissions.mask & 1 != 0 { "Initiate" } else { "" },
+            if member.permissions.can_vote() { " Vote" } else { "" },
+            if member.permissions.can_execute() { " Execute" } else { "" },
+        );
+
+        members.push(serde_json::json!({
+            "key": member.key.to_string(),
+            "permissions": perms.trim(),
+            "can_vote": member.permissions.can_vote(),
+            "can_execute": member.permissions.can_execute(),
+            "nonce_accounts": nonce_count,
+            "nonce_account_addresses": nonce_addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+        }));
+    }
+
+    let nonce_risk = if members_with_nonces >= config.threshold as usize {
+        "CRITICAL"
+    } else if members_with_nonces > 0 {
+        "WARNING"
+    } else {
+        "OK"
+    };
+
+    // Build nonce-specific recommendations
+    let mut all_recommendations = health.recommendations.clone();
+    if members_with_nonces > 0 {
+        all_recommendations.push(format!(
+            "{} member(s) have durable nonce accounts. Advance (invalidate) any nonce accounts \
+             that are not actively needed to revoke pre-signed transactions.",
+            members_with_nonces
+        ));
+    }
+    if members_with_nonces >= config.threshold as usize {
+        all_recommendations.push(format!(
+            "CRITICAL: {} members with nonce accounts meets or exceeds the threshold of {}. \
+             These members could execute pre-signed transactions without other members' knowledge.",
+            members_with_nonces, config.threshold
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "address": address,
+        "health_score": health.total,
+        "health_label": health_label,
+        "config": {
+            "threshold": config.threshold,
+            "member_count": config.member_count,
+            "voter_count": config.voter_count,
+            "time_lock": config.time_lock,
+        },
+        "risks": health.risks,
+        "recommendations": all_recommendations,
+        "nonce_summary": {
+            "members_with_nonces": members_with_nonces,
+            "total_nonce_accounts": total_nonces,
+            "risk_level": nonce_risk,
+        },
+        "members": members,
+        "drift_comparison": {
+            "note": "Drift Protocol was exploited with threshold=2/5, timelock=0s",
+            "drift_threshold": "2/5",
+            "drift_timelock": 0,
+            "drift_health_score": 20,
+            "your_threshold": format!("{}/{}", config.threshold, config.member_count),
+            "your_timelock": config.time_lock,
+        },
+    })))
+}
+
 /// Replay and score a transaction
 async fn api_replay(
     State(state): State<Arc<AppState>>,
@@ -120,7 +234,7 @@ async fn api_replay(
     let mut ctx = state.scoring_ctx.lock().await;
 
     for event in events {
-        let enriched = enrich(&state.rpc, event)
+        let enriched = enrich_full(&state.rpc, event)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let threat = score_with_context(&enriched, &mut ctx);
@@ -161,29 +275,3 @@ async fn api_stats() -> Json<serde_json::Value> {
     }))
 }
 
-/// Count nonce accounts for a given authority (reused from scan binary)
-async fn count_nonce_accounts(
-    rpc: &RpcClient,
-    authority: &solana_sdk::pubkey::Pubkey,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    use solana_client::rpc_config::RpcProgramAccountsConfig;
-    use solana_client::rpc_filter::{Memcmp, RpcFilterType};
-    use std::str::FromStr;
-
-    let system_program =
-        solana_sdk::pubkey::Pubkey::from_str("11111111111111111111111111111111")?;
-
-    let config = RpcProgramAccountsConfig {
-        filters: Some(vec![
-            RpcFilterType::DataSize(80),
-            RpcFilterType::Memcmp(Memcmp::new_raw_bytes(8, authority.to_bytes().to_vec())),
-        ]),
-        ..Default::default()
-    };
-
-    let accounts = rpc
-        .get_program_accounts_with_config(&system_program, config)
-        .await?;
-
-    Ok(accounts.len())
-}

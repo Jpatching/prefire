@@ -6,7 +6,7 @@ use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::{
-    EncodedTransaction, UiMessage, UiTransactionEncoding,
+    EncodedTransaction, UiMessage, UiTransactionEncoding, UiTransactionTokenBalance,
 };
 use thiserror::Error;
 
@@ -47,6 +47,14 @@ pub async fn replay_transaction(
     // Extract log messages -- meta.log_messages is OptionSerializer, not Option
     let logs: Vec<String> = Option::from(meta.log_messages).unwrap_or_default();
 
+    // Extract balance data for SOL/token outflow detection
+    let pre_balances: Vec<u64> = Option::from(meta.pre_balances).unwrap_or_default();
+    let post_balances: Vec<u64> = Option::from(meta.post_balances).unwrap_or_default();
+    let pre_token_balances: Vec<UiTransactionTokenBalance> =
+        Option::from(meta.pre_token_balances).unwrap_or_default();
+    let post_token_balances: Vec<UiTransactionTokenBalance> =
+        Option::from(meta.post_token_balances).unwrap_or_default();
+
     // Extract account keys and signers from the transaction message
     let (account_keys, num_signers) = extract_account_info(&tx.transaction.transaction)?;
     let signers = account_keys[..num_signers].to_vec();
@@ -70,6 +78,10 @@ pub async fn replay_transaction(
                 signers: signers.clone(),
                 account_keys: account_keys.clone(),
                 log_messages: logs.clone(),
+                pre_balances: pre_balances.clone(),
+                post_balances: post_balances.clone(),
+                pre_token_balances: pre_token_balances.clone(),
+                post_token_balances: post_token_balances.clone(),
             });
         }
     }

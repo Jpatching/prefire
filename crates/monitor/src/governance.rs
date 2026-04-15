@@ -1,5 +1,6 @@
 use serde::Serialize;
 use solana_sdk::pubkey::Pubkey;
+use solana_transaction_status_client_types::UiTransactionTokenBalance;
 
 /// What type of governance action was detected.
 /// The multisig address lives on MonitoredEvent, not here --
@@ -27,6 +28,17 @@ pub struct MonitoredEvent {
     pub account_keys: Vec<Pubkey>,
     #[serde(skip)]
     pub log_messages: Vec<String>,
+    /// SOL balances before/after transaction (from getTransaction metadata).
+    /// Empty in live WebSocket mode (balance data not available until replay).
+    #[serde(skip)]
+    pub pre_balances: Vec<u64>,
+    #[serde(skip)]
+    pub post_balances: Vec<u64>,
+    /// Token balances before/after transaction.
+    #[serde(skip)]
+    pub pre_token_balances: Vec<UiTransactionTokenBalance>,
+    #[serde(skip)]
+    pub post_token_balances: Vec<UiTransactionTokenBalance>,
 }
 
 pub fn classify_instruction(instruction_name: &str) -> Option<GovernanceEvent> {

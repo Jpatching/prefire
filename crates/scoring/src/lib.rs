@@ -38,7 +38,7 @@ pub struct ThreatScore {
 ///   Config change (15) -- membership or threshold modification
 ///   Vault transfer (10) -- fund movement event
 ///   Rapid governance (25) -- temporal, requires ScoringContext
-///   High-value outflow (10) -- large SOL/token drain (future)
+///   High-value outflow (10) -- large SOL outflow (>100 SOL)
 ///
 /// Removed: "single_signer" -- every Squads tx has 1 signer because each
 /// member approves in a separate tx. It always fires. Useless.
@@ -96,6 +96,64 @@ pub fn score(enriched: &EnrichedEvent) -> ThreatScore {
             reason: format!(
                 "vault transfer detected: {}",
                 event_description(&enriched.event.event)
+            ),
+        });
+    }
+
+    // Signal 5: Config weakened (max 20 pts)
+    // A config change that LOWERS the threshold or REMOVES the timelock
+    // is a setup-phase signal. Drift's March 27 migration removed the
+    // timelock -- this signal would have caught it 5 days before execution.
+    if let Some(ref delta) = enriched.config_delta {
+        if delta.is_weakened() {
+            let mut parts = Vec::new();
+            if let Some((old, new)) = delta.threshold_changed {
+                if new < old {
+                    parts.push(format!("threshold lowered from {} to {}", old, new));
+                }
+            }
+            if let Some((old, new)) = delta.timelock_changed {
+                if new < old {
+                    parts.push(format!("timelock reduced from {}s to {}s", old, new));
+                }
+            }
+            signals.push(Signal {
+                name: "config_weakened",
+                score: 20,
+                reason: format!(
+                    "governance config weakened: {}",
+                    parts.join(", ")
+                ),
+            });
+        }
+    }
+
+    // Signal 6: Nonce accounts meet threshold (max 25 pts)
+    // When enough multisig members have durable nonce accounts to meet
+    // the signing threshold, pre-signed transactions can be executed
+    // without other members' knowledge. This is the Drift nonce setup
+    // pattern (March 23-30).
+    if enriched.nonce_threshold_met {
+        signals.push(Signal {
+            name: "nonce_threshold_met",
+            score: 25,
+            reason: "members with durable nonce accounts can meet signing threshold \
+                     — pre-signed transactions may exist"
+                .to_string(),
+        });
+    }
+
+    // Signal 7: High-value SOL outflow (max 10 pts)
+    // Fires when a single account loses >100 SOL in the transaction.
+    // Only populated in replay/API paths (live mode has no balance data).
+    // Negative value = outflow. 100 SOL = 100_000_000_000 lamports.
+    if enriched.sol_outflow_lamports < -100_000_000_000 {
+        signals.push(Signal {
+            name: "high_value_outflow",
+            score: 10,
+            reason: format!(
+                "large SOL outflow: {} SOL drained from a single account",
+                enriched.sol_outflow_lamports.abs() / 1_000_000_000
             ),
         });
     }
@@ -397,6 +455,10 @@ mod tests {
                 signers: vec![Pubkey::new_unique()],
                 account_keys,
                 log_messages: vec![],
+                pre_balances: vec![],
+                post_balances: vec![],
+                pre_token_balances: vec![],
+                post_token_balances: vec![],
             },
             multisig_config: Some(MultisigConfig {
                 threshold: 2,
@@ -407,6 +469,8 @@ mod tests {
             uses_durable_nonce: uses_nonce,
             sol_outflow_lamports: 0,
             token_transfers: vec![],
+            config_delta: None,
+            nonce_threshold_met: false,
         }
     }
 
@@ -457,6 +521,10 @@ mod tests {
                 signers: vec![],
                 account_keys: vec![],
                 log_messages: vec![],
+                pre_balances: vec![],
+                post_balances: vec![],
+                pre_token_balances: vec![],
+                post_token_balances: vec![],
             },
             multisig_config: Some(MultisigConfig {
                 threshold: 2,
@@ -467,6 +535,8 @@ mod tests {
             uses_durable_nonce: true,
             sol_outflow_lamports: 0,
             token_transfers: vec![],
+            config_delta: None,
+            nonce_threshold_met: false,
         };
 
         let approve_event = EnrichedEvent {
@@ -481,6 +551,10 @@ mod tests {
                 signers: vec![],
                 account_keys: vec![],
                 log_messages: vec![],
+                pre_balances: vec![],
+                post_balances: vec![],
+                pre_token_balances: vec![],
+                post_token_balances: vec![],
             },
             multisig_config: Some(MultisigConfig {
                 threshold: 2,
@@ -491,6 +565,8 @@ mod tests {
             uses_durable_nonce: true,
             sol_outflow_lamports: 0,
             token_transfers: vec![],
+            config_delta: None,
+            nonce_threshold_met: false,
         };
 
         let mut ctx = ScoringContext::new();
@@ -579,5 +655,145 @@ mod tests {
         let health = governance_health(&config);
         // zero_timelock(-40) + low_ratio(-25) + single_signer(-20) + drift_pattern(-15) = 100
         assert_eq!(health.total, 0);
+    }
+
+    // --- New signal tests ---
+
+    #[test]
+    fn config_weakened_fires_on_threshold_lowered() {
+        use prefire_enrichment::multisig::ConfigDelta;
+
+        let mut enriched = make_event(
+            GovernanceEvent::ConfigChange {
+                description: "ConfigMemberRemove".to_string(),
+            },
+            false,
+        );
+        enriched.config_delta = Some(ConfigDelta {
+            threshold_changed: Some((3, 2)),
+            timelock_changed: None,
+            members_added: 0,
+            members_removed: 1,
+        });
+
+        let result = score(&enriched);
+        let has_weakened = result.signals.iter().any(|s| s.name == "config_weakened");
+        assert!(has_weakened, "config_weakened should fire when threshold lowered");
+        // config_change(15) + config_weakened(20) + zero_timelock(10) = 45
+        assert_eq!(result.total, 45);
+        assert_eq!(result.verdict, Verdict::Suspicious);
+    }
+
+    #[test]
+    fn config_weakened_fires_on_timelock_removed() {
+        use prefire_enrichment::multisig::ConfigDelta;
+
+        let mut enriched = make_event(
+            GovernanceEvent::ConfigChange {
+                description: "ConfigChangeTimelock".to_string(),
+            },
+            false,
+        );
+        enriched.config_delta = Some(ConfigDelta {
+            threshold_changed: None,
+            timelock_changed: Some((86400, 0)),
+            members_added: 0,
+            members_removed: 0,
+        });
+
+        let result = score(&enriched);
+        let has_weakened = result.signals.iter().any(|s| s.name == "config_weakened");
+        assert!(has_weakened, "config_weakened should fire when timelock removed");
+    }
+
+    #[test]
+    fn config_strengthened_does_not_fire() {
+        use prefire_enrichment::multisig::ConfigDelta;
+
+        let mut enriched = make_event(
+            GovernanceEvent::ConfigChange {
+                description: "ConfigChangeThreshold".to_string(),
+            },
+            false,
+        );
+        // Threshold RAISED = good change, should NOT fire config_weakened
+        enriched.config_delta = Some(ConfigDelta {
+            threshold_changed: Some((2, 4)),
+            timelock_changed: None,
+            members_added: 0,
+            members_removed: 0,
+        });
+
+        let result = score(&enriched);
+        let has_weakened = result.signals.iter().any(|s| s.name == "config_weakened");
+        assert!(!has_weakened, "config_weakened should NOT fire when threshold raised");
+    }
+
+    #[test]
+    fn nonce_threshold_met_fires() {
+        let mut enriched = make_event(
+            GovernanceEvent::ProposalCreated {
+                description: "ProposalCreate".to_string(),
+            },
+            true,
+        );
+        enriched.nonce_threshold_met = true;
+
+        let result = score(&enriched);
+        let has_signal = result.signals.iter().any(|s| s.name == "nonce_threshold_met");
+        assert!(has_signal, "nonce_threshold_met should fire");
+        // durable_nonce(30) + zero_timelock(10) + nonce_threshold_met(25) = 65
+        assert_eq!(result.total, 65);
+        assert_eq!(result.verdict, Verdict::Critical);
+    }
+
+    #[test]
+    fn nonce_threshold_not_met_does_not_fire() {
+        let enriched = make_event(
+            GovernanceEvent::ProposalCreated {
+                description: "ProposalCreate".to_string(),
+            },
+            true,
+        );
+        // nonce_threshold_met defaults to false in make_event
+
+        let result = score(&enriched);
+        let has_signal = result.signals.iter().any(|s| s.name == "nonce_threshold_met");
+        assert!(!has_signal);
+    }
+
+    #[test]
+    fn high_value_outflow_fires_on_large_drain() {
+        let mut enriched = make_event(
+            GovernanceEvent::VaultTransfer {
+                description: "VaultTransactionExecute".to_string(),
+            },
+            true,
+        );
+        // Simulate 500 SOL drained (negative = outflow)
+        enriched.sol_outflow_lamports = -500_000_000_000;
+
+        let result = score(&enriched);
+        let has_outflow = result.signals.iter().any(|s| s.name == "high_value_outflow");
+        assert!(has_outflow, "high_value_outflow should fire on 500 SOL drain");
+        // durable_nonce(30) + zero_timelock(10) + vault_transfer(10) + high_value_outflow(10) = 60
+        assert_eq!(result.total, 60);
+        assert_eq!(result.verdict, Verdict::Suspicious);
+    }
+
+    #[test]
+    fn small_outflow_does_not_fire() {
+        let mut enriched = make_event(
+            GovernanceEvent::VaultTransfer {
+                description: "VaultTransactionExecute".to_string(),
+            },
+            false,
+        );
+        // 5 SOL outflow -- below 100 SOL threshold
+        enriched.sol_outflow_lamports = -5_000_000_000;
+
+        let result = score(&enriched);
+        let has_outflow = result.signals.iter().any(|s| s.name == "high_value_outflow");
+        assert!(!has_outflow, "high_value_outflow should NOT fire on 5 SOL");
     }
 }

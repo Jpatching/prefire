@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use solana_client::nonblocking::rpc_client::RpcClient;
 
-use prefire_enrichment::enrich;
+use prefire_enrichment::enrich_full;
 use prefire_scoring::{score_with_context, ScoringContext, Verdict};
 
 #[tokio::main]
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  signers: {:?}", event.signers);
             }
 
-            let enriched = match enrich(&rpc, event).await {
+            let enriched = match enrich_full(&rpc, event).await {
                 Ok(e) => e,
                 Err(e) => {
                     if !batch_mode {

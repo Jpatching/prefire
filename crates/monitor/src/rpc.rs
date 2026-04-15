@@ -44,6 +44,10 @@ pub async fn subscribe_squads_events(
                         signers: vec![],             // resolved in enrichment
                         account_keys: vec![],        // resolved in enrichment
                         log_messages: logs.clone(),
+                        pre_balances: vec![],        // not available from logsSubscribe
+                        post_balances: vec![],
+                        pre_token_balances: vec![],
+                        post_token_balances: vec![],
                     });
                 }
             }
