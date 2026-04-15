@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -6,17 +7,46 @@ use axum::response::{Html, Json};
 use axum::routing::get;
 use axum::Router;
 use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_client::rpc_config::RpcProgramAccountsConfig;
+use solana_client::rpc_filter::{Memcmp, RpcFilterType};
+use solana_sdk::pubkey::Pubkey;
 
-use prefire_enrichment::{enrich_full};
-use prefire_enrichment::multisig::{fetch_multisig_config, MultisigConfig};
+use prefire_enrichment::enrich_full;
+use prefire_enrichment::multisig::{fetch_multisig_config, MultisigConfig, MultisigAccount};
 use prefire_enrichment::nonce::fetch_nonce_accounts;
 use prefire_scoring::{governance_health, score_with_context, ScoringContext};
 
 use tokio::sync::Mutex;
 
+/// Cached mainnet statistics. Persisted to disk to avoid hammering RPC.
+/// getProgramAccounts is the correct Solana-native way to enumerate accounts,
+/// but it's an expensive query that hits rate limits on most RPC providers.
+/// We run it in the background and cache results.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedStats {
+    total_multisigs: usize,
+    zero_timelock_vulnerable: usize,
+    last_refreshed: String,
+}
+
+const STATS_CACHE_PATH: &str = "data/stats_cache.json";
+
+fn load_cached_stats() -> Option<CachedStats> {
+    let data = std::fs::read_to_string(STATS_CACHE_PATH).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn save_cached_stats(stats: &CachedStats) {
+    let _ = std::fs::create_dir_all("data");
+    if let Ok(json) = serde_json::to_string_pretty(stats) {
+        let _ = std::fs::write(STATS_CACHE_PATH, json);
+    }
+}
+
 struct AppState {
     rpc: Arc<RpcClient>,
     scoring_ctx: Mutex<ScoringContext>,
+    stats: Mutex<CachedStats>,
 }
 
 #[tokio::main]
@@ -25,9 +55,48 @@ async fn main() {
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
 
+    let rpc = Arc::new(RpcClient::new(rpc_url));
+
+    // Load cached stats from disk if available, otherwise show computing state
+    let initial_stats = load_cached_stats().unwrap_or(CachedStats {
+        total_multisigs: 0,
+        zero_timelock_vulnerable: 0,
+        last_refreshed: "computing...".to_string(),
+    });
+    if initial_stats.total_multisigs > 0 {
+        println!(
+            "loaded cached stats: {} multisigs ({} vulnerable) from {}",
+            initial_stats.total_multisigs,
+            initial_stats.zero_timelock_vulnerable,
+            initial_stats.last_refreshed
+        );
+    }
+
     let state = Arc::new(AppState {
-        rpc: Arc::new(RpcClient::new(rpc_url)),
+        rpc,
         scoring_ctx: Mutex::new(ScoringContext::new()),
+        stats: Mutex::new(initial_stats),
+    });
+
+    // Background task: refresh stats every 2 hours.
+    // Uses getProgramAccounts which is heavy -- don't run too frequently.
+    let bg_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        // If we already have cached data, wait before first refresh
+        let has_cache = bg_state.stats.lock().await.total_multisigs > 0;
+        if has_cache {
+            tokio::time::sleep(std::time::Duration::from_secs(7200)).await;
+        }
+        loop {
+            println!("refreshing mainnet stats via getProgramAccounts...");
+            let refreshed = compute_mainnet_stats(&bg_state.rpc).await;
+            if refreshed.total_multisigs > 0 {
+                save_cached_stats(&refreshed);
+                *bg_state.stats.lock().await = refreshed;
+                println!("stats refreshed and cached to disk");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(7200)).await;
+        }
     });
 
     let app = Router::new()
@@ -258,20 +327,119 @@ async fn api_replay(
     })))
 }
 
-/// Overall stats
-async fn api_stats() -> Json<serde_json::Value> {
+/// Live mainnet stats (cached, refreshed every 30 min)
+async fn api_stats(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let stats = state.stats.lock().await;
     Json(serde_json::json!({
-        "total_multisigs_on_mainnet": 150686,
-        "zero_timelock_with_threshold_gte_2": 94442,
+        "total_multisigs_on_mainnet": stats.total_multisigs,
+        "zero_timelock_with_threshold_gte_2": stats.zero_timelock_vulnerable,
+        "last_refreshed": stats.last_refreshed,
         "known_exploits_detected": 1,
         "exploit_name": "Drift Protocol ($285M, April 2026)",
         "signals": [
             "durable_nonce (30 pts)",
+            "nonce_threshold_met (25 pts)",
             "rapid_governance (25 pts)",
+            "config_weakened (20 pts)",
             "config_change (15 pts)",
             "zero_timelock (10 pts)",
             "vault_transfer (10 pts)",
+            "high_value_outflow (10 pts)",
         ],
     }))
+}
+
+/// Query mainnet for real Squads v4 multisig statistics.
+/// Uses getProgramAccounts with discriminator filter, then deserializes
+/// each to check threshold/timelock configuration.
+///
+/// This is an expensive query (scans all Squads accounts). Runs in background
+/// and caches results. Retries with backoff on RPC overload.
+async fn compute_mainnet_stats(rpc: &RpcClient) -> CachedStats {
+    use prefire_enrichment::multisig::multisig_discriminator;
+
+    let squads_id = match Pubkey::from_str("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf") {
+        Ok(id) => id,
+        Err(_) => {
+            return CachedStats {
+                total_multisigs: 0,
+                zero_timelock_vulnerable: 0,
+                last_refreshed: "error: invalid program ID".to_string(),
+            };
+        }
+    };
+
+    let disc = multisig_discriminator();
+
+    // Filter by discriminator to only get Multisig accounts (not Proposals,
+    // VaultTransactions, etc). This is the most selective filter available.
+    let config = RpcProgramAccountsConfig {
+        filters: Some(vec![
+            RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, disc.to_vec())),
+        ]),
+        ..Default::default()
+    };
+
+    // Retry with backoff if RPC is overloaded
+    let mut attempts = 0;
+    let accounts = loop {
+        match rpc
+            .get_program_accounts_with_config(&squads_id, config.clone())
+            .await
+        {
+            Ok(accs) => break accs,
+            Err(e) => {
+                attempts += 1;
+                if attempts >= 3 {
+                    eprintln!("stats query failed after {} attempts: {}", attempts, e);
+                    return CachedStats {
+                        total_multisigs: 0,
+                        zero_timelock_vulnerable: 0,
+                        last_refreshed: format!(
+                            "query failed: {} (will retry in 30 min)",
+                            e
+                        ),
+                    };
+                }
+                let delay = std::time::Duration::from_secs(10 * attempts);
+                eprintln!(
+                    "stats query attempt {} failed ({}), retrying in {}s...",
+                    attempts,
+                    e,
+                    delay.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    };
+
+    let total = accounts.len();
+    let mut vulnerable = 0;
+
+    for (_pubkey, account) in &accounts {
+        if account.data.len() < 9 {
+            continue;
+        }
+        let mut slice = &account.data[8..];
+        if let Ok(ms) = <MultisigAccount as borsh::BorshDeserialize>::deserialize(&mut slice) {
+            if ms.time_lock == 0 && ms.threshold >= 2 {
+                vulnerable += 1;
+            }
+        }
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    println!(
+        "stats: {} multisigs, {} vulnerable (zero timelock + threshold >= 2)",
+        total, vulnerable
+    );
+
+    CachedStats {
+        total_multisigs: total,
+        zero_timelock_vulnerable: vulnerable,
+        last_refreshed: timestamp,
+    }
 }
 

@@ -61,6 +61,7 @@
   <div class="stat"><div class="stat-value" id="stat-zero-tl">—</div><div class="stat-label">Zero Timelock (threshold &ge;2)</div></div>
   <div class="stat"><div class="stat-value" id="stat-exploits">—</div><div class="stat-label">Known Exploits Detected</div></div>
 </div>
+<div id="stats-refreshed" style="color:#565f89;font-size:0.75rem;margin-top:-1rem;margin-bottom:1rem;"></div>
 
 <div class="section">
   <h3>Governance Health Check</h3>
@@ -92,7 +93,7 @@
     Prefire detects governance attack patterns by combining multiple weak signals into strong threat assessments.
     Built for the Colosseum Frontier hackathon. Validated against the $285M Drift Protocol exploit (April 2026).
     <br><br>
-    <strong style="color:#e0e0e0;">Signals:</strong> durable nonce (30pts) | rapid governance (25pts) | config change (15pts) | zero timelock (10pts) | vault transfer (10pts)
+    <strong style="color:#e0e0e0;">Signals:</strong> durable nonce (30) | nonce threshold met (25) | rapid governance (25) | config weakened (20) | config change (15) | zero timelock (10) | vault transfer (10) | high-value outflow (10)
     <br>
     <strong style="color:#e0e0e0;">Verdicts:</strong> <span class="safe">SAFE (0-30)</span> | <span class="suspicious">SUSPICIOUS (31-60)</span> | <span class="critical">CRITICAL (61-100)</span>
   </p>
@@ -106,6 +107,9 @@ async function loadStats() {
     document.getElementById('stat-multisigs').textContent = d.total_multisigs_on_mainnet.toLocaleString();
     document.getElementById('stat-zero-tl').textContent = d.zero_timelock_with_threshold_gte_2.toLocaleString();
     document.getElementById('stat-exploits').textContent = d.known_exploits_detected;
+    if (d.last_refreshed) {
+      document.getElementById('stats-refreshed').textContent = 'Live from mainnet — last refreshed: ' + d.last_refreshed;
+    }
   } catch(e) { console.error(e); }
 }
 
