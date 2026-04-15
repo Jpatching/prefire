@@ -56,7 +56,7 @@ pub struct MultisigAccount {
 
 /// The subset of multisig config that scoring needs.
 /// Extracted from the full MultisigAccount to keep the scoring interface clean.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct MultisigConfig {
     pub threshold: u16,
     pub member_count: usize,
@@ -135,6 +135,8 @@ pub enum MultisigError {
     DataTooShort(usize),
     #[error("borsh deserialization failed: {0}")]
     Deserialize(String),
+    #[error("invalid data: {0}")]
+    InvalidData(String),
 }
 
 /// Fetch and deserialize a Squads v4 Multisig account from on-chain data.
@@ -151,6 +153,13 @@ pub async fn fetch_multisig_config(
     }
 
     let mut slice = &data[ANCHOR_DISCRIMINATOR_LEN..];
-    MultisigAccount::deserialize(&mut slice)
-        .map_err(|e| MultisigError::Deserialize(e.to_string()))
+    let account = MultisigAccount::deserialize(&mut slice)
+        .map_err(|e| MultisigError::Deserialize(e.to_string()))?;
+    if account.members.len() > 255 {
+        return Err(MultisigError::InvalidData(format!(
+            "too many members: {}",
+            account.members.len()
+        )));
+    }
+    Ok(account)
 }

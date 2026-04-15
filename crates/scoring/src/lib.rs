@@ -230,11 +230,33 @@ pub fn governance_health(config: &MultisigConfig) -> HealthScore {
             deduction: d,
             reason: "no delay between proposal approval and execution".to_string(),
         });
-        recommendations.push(
-            "Add a timelock (recommended: 86400s / 24 hours) to give other members \
-             time to review and veto proposals before execution"
-                .to_string(),
-        );
+        // Contextual recommendation: acknowledge when threshold is reasonable
+        let is_low_threshold = config.member_count > 0
+            && (config.threshold as usize).checked_mul(2).unwrap_or(0) < config.member_count;
+        let threshold_pct = if config.member_count > 0 {
+            (config.threshold as usize)
+                .checked_mul(100)
+                .and_then(|n| n.checked_div(config.member_count))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if is_low_threshold {
+            let rec_threshold = config.member_count / 2 + 1;
+            recommendations.push(format!(
+                "Zero timelock with {}/{} ({}%) approval is critical. \
+                 Add a timelock (recommended: 86400s / 24h) AND increase threshold to {}/{}.",
+                config.threshold, config.member_count, threshold_pct,
+                rec_threshold, config.member_count
+            ));
+        } else {
+            recommendations.push(format!(
+                "Your {}/{} ({}%) threshold is reasonable, but zero timelock means \
+                 no cancellation window. Add a timelock (recommended: 86400s / 24h) \
+                 so other members can review proposals before execution.",
+                config.threshold, config.member_count, threshold_pct
+            ));
+        }
         deductions += d as u16;
     }
 
@@ -260,9 +282,10 @@ pub fn governance_health(config: &MultisigConfig) -> HealthScore {
             ),
         });
         recommendations.push(format!(
-            "Increase threshold to at least {}/{} (>50%) so a majority of members must approve",
-            config.member_count / 2 + 1,
-            config.member_count
+            "Your {}/{} threshold means only {}% approval is needed. \
+             Increase to at least {}/{} (>50%) so a majority must approve.",
+            config.threshold, config.member_count, pct,
+            config.member_count / 2 + 1, config.member_count
         ));
         deductions += d as u16;
     }
@@ -279,30 +302,11 @@ pub fn governance_health(config: &MultisigConfig) -> HealthScore {
                 config.member_count
             ),
         });
-        recommendations.push(
-            "Increase threshold to at least 2 to require multiple approvals".to_string(),
-        );
-        deductions += d as u16;
-    }
-
-    // Risk 4: Compound risk — zero timelock + low threshold (-15 bonus)
-    // This is the EXACT Drift configuration. Flag it explicitly.
-    if config.time_lock == 0 && config.threshold < 3 && config.member_count >= 3 {
-        let d = 15;
-        risks.push(Risk {
-            name: "drift_pattern",
-            deduction: d,
-            reason: format!(
-                "zero timelock + threshold={} matches the Drift exploit configuration \
-                 ($285M stolen April 2026)",
-                config.threshold
-            ),
-        });
-        recommendations.push(
-            "This is the exact configuration exploited in the Drift Protocol attack. \
-             Priority: add timelock AND increase threshold"
-                .to_string(),
-        );
+        recommendations.push(format!(
+            "Any single member of your {}-member multisig can act alone (threshold=1). \
+             Increase to at least 2 to require multiple approvals.",
+            config.member_count
+        ));
         deductions += d as u16;
     }
 
@@ -622,10 +626,10 @@ mod tests {
             time_lock: 0,
         };
         let health = governance_health(&config);
-        // Should deduct: zero_timelock(-40) + low_ratio(-25) + drift_pattern(-15) = 80
-        // Score: 100 - 80 = 20
-        assert_eq!(health.total, 20);
-        assert!(health.risks.len() >= 3);
+        // Should deduct: zero_timelock(-40) + low_ratio(-25) = 65
+        // Score: 100 - 65 = 35
+        assert_eq!(health.total, 35);
+        assert!(health.risks.len() >= 2);
         assert!(!health.recommendations.is_empty());
     }
 
@@ -653,8 +657,30 @@ mod tests {
             time_lock: 0,
         };
         let health = governance_health(&config);
-        // zero_timelock(-40) + low_ratio(-25) + single_signer(-20) + drift_pattern(-15) = 100
-        assert_eq!(health.total, 0);
+        // zero_timelock(-40) + low_ratio(-25) + single_signer(-20) = 85
+        assert_eq!(health.total, 15);
+    }
+
+    #[test]
+    fn two_of_three_is_not_drift() {
+        // 2/3 = 67% majority -- reasonable config. Should NOT trigger low_threshold_ratio.
+        // Only zero_timelock (-40) fires. Score = 60.
+        let config = MultisigConfig {
+            threshold: 2,
+            member_count: 3,
+            voter_count: 3,
+            time_lock: 0,
+        };
+        let health = governance_health(&config);
+        assert_eq!(health.total, 60);
+        assert!(
+            health.risks.iter().all(|r| r.name != "drift_pattern"),
+            "drift_pattern signal should not exist"
+        );
+        assert!(
+            health.risks.iter().all(|r| r.name != "low_threshold_ratio"),
+            "2/3 is majority -- low_threshold_ratio should not fire"
+        );
     }
 
     // --- New signal tests ---

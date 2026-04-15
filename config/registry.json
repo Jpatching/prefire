@@ -3,8 +3,22 @@
     {
       "name": "Drift Protocol",
       "multisig_address": "2LW6PSEjp81xSEttWwXDB6Etb1eKdhYPbFEojYbyhx88",
-      "program_id": "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH",
-      "notes": "Security Council multisig. Exploited April 1, 2026 ($285M). Threshold 2/5, zero timelock."
+      "notes": "Security Council multisig. Exploited April 1, 2026 ($285M)."
+    },
+    {
+      "name": "Monitored Multisig A",
+      "multisig_address": "DDV1BEtsuZWM7mLAzmdur6VR6XWcZkXyZ1mUK2H58yqk",
+      "notes": "2/14 threshold (14% approval). Zero timelock."
+    },
+    {
+      "name": "Monitored Multisig B",
+      "multisig_address": "xzexJVTxepkeAdTtjiuvGa7y3zwqyvwNP3LcDAzhoJ4",
+      "notes": "2/26 threshold (8% approval). Zero timelock."
+    },
+    {
+      "name": "Monitored Multisig C",
+      "multisig_address": "FvCjcnh9QfP7nRQ8h1sD3W7Q9sEwZH7jAYcia4ZRpLTW",
+      "notes": "2/3 threshold (67% approval). Zero timelock."
     }
   ]
 }

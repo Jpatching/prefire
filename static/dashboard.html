@@ -49,6 +49,24 @@
   .drift-compare { display: flex; gap: 2rem; margin-top: 1rem; font-size: 0.85rem; }
   .drift-col { flex: 1; background: #111; border-radius: 6px; padding: 0.8rem; }
   .drift-col h4 { color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.5rem; }
+  .examples { color: #565f89; font-size: 0.78rem; margin-top: 0.4rem; }
+  .examples a { color: #ff6b35; text-decoration: none; }
+  .examples a:hover { text-decoration: underline; }
+  .how-it-works { display: flex; gap: 1.5rem; margin: 1.5rem 0; flex-wrap: wrap; }
+  .how-step { flex: 1; min-width: 150px; text-align: center; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 1rem 1.5rem; }
+  .how-step-num { font-size: 1.8rem; font-weight: bold; color: #ff6b35; }
+  .how-step-label { color: #888; font-size: 0.8rem; margin-top: 0.3rem; }
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    input { width: 100%; }
+    button { width: 100%; margin-left: 0; margin-top: 0.5rem; }
+    .stats, .how-it-works { flex-direction: column; }
+    .drift-compare { flex-direction: column; }
+    table { font-size: 0.75rem; }
+    th, td { padding: 0.3rem 0.4rem; }
+    .mono { font-size: 0.65rem; word-break: break-all; }
+    .health-score { font-size: 1.8rem; }
+  }
 </style>
 </head>
 <body>
@@ -56,19 +74,91 @@
 <h1>PREFIRE</h1>
 <h2>Solana Governance Attack Detection — Passive, Permissionless, Real-Time</h2>
 
+<div class="section" style="border-color:#ff6b35;margin-bottom:2rem;">
+  <h3 style="font-size:1.3rem;margin-top:0;">Check Your Multisig Health</h3>
+  <p style="color:#888;font-size:0.9rem;margin-bottom:1rem;">Paste any Squads v4 multisig address to get a full risk assessment with actionable recommendations.</p>
+  <input id="health-input" placeholder="Multisig address (e.g. 2LW6PSEjp81xSEtt...)" />
+  <button id="health-btn" onclick="runHealth()">Assess</button>
+  <p class="examples">
+    Try: <a href="#" onclick="tryExample('health-input', runHealth, '2LW6PSEjp81xSEttWwXDB6Etb1eKdhYPbFEojYbyhx88'); return false;">Drift Protocol (exploited)</a>
+  </p>
+  <div class="result" id="health-result"></div>
+</div>
+
+<div class="section" style="border-color:#2ecc71;">
+  <h3 style="color:#2ecc71;margin-top:0;">Monitor Your Multisig</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:1rem;">Get continuous monitoring with webhook alerts. Bring your own RPC. We check every 5 minutes.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;">
+    <input id="watch-address" placeholder="Multisig address" style="flex:2;min-width:200px;" />
+    <input id="watch-name" placeholder="Protocol name" style="flex:1;min-width:120px;" />
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;">
+    <input id="watch-webhook" placeholder="Discord/Slack webhook URL (optional)" style="flex:1;min-width:200px;" />
+    <input id="watch-rpc" placeholder="Your RPC URL (optional)" style="flex:1;min-width:200px;" />
+  </div>
+  <button onclick="addWatch()" style="background:#2ecc71;">Start Monitoring</button>
+  <div id="watch-result" class="result" style="font-size:0.85rem;"></div>
+</div>
+
+<div class="how-it-works">
+  <div class="how-step"><div class="how-step-num">1</div><div class="how-step-label">Paste a multisig address</div></div>
+  <div class="how-step"><div class="how-step-num">2</div><div class="how-step-label">See risk score and breakdown</div></div>
+  <div class="how-step"><div class="how-step-num">3</div><div class="how-step-label">Get actionable recommendations</div></div>
+</div>
+
+<div class="section" style="border-color:#ff6b35;position:relative;overflow:hidden;">
+  <h3 style="margin-top:0;font-size:1.1rem;">The Drift Exploit: What We Would Have Caught</h3>
+  <p style="color:#888;font-size:0.8rem;margin-bottom:1rem;">$285M stolen April 1, 2026. Prefire detects the setup phase -- 9 days before the theft.</p>
+  <div style="border-left:2px solid #333;margin-left:0.5rem;padding-left:1.2rem;">
+    <div style="margin-bottom:1rem;position:relative;">
+      <div style="position:absolute;left:-1.55rem;top:0.1rem;width:10px;height:10px;border-radius:50%;background:#ff6b35;"></div>
+      <div style="color:#aaa;font-size:0.78rem;">March 23</div>
+      <div style="color:#e0e0e0;font-size:0.85rem;">Nonce accounts created for 2 of 5 members</div>
+      <div style="color:#ff6b35;font-size:0.8rem;margin-top:0.2rem;">PREFIRE: nonce_threshold_met (CRITICAL) -- "2 members with nonces meets signing threshold"</div>
+    </div>
+    <div style="margin-bottom:1rem;position:relative;">
+      <div style="position:absolute;left:-1.55rem;top:0.1rem;width:10px;height:10px;border-radius:50%;background:#ff6b35;"></div>
+      <div style="color:#aaa;font-size:0.78rem;">March 26</div>
+      <div style="color:#e0e0e0;font-size:0.85rem;">Config migrated to 2/5 threshold, zero timelock</div>
+      <div style="color:#ff6b35;font-size:0.8rem;margin-top:0.2rem;">PREFIRE: config_weakened + zero_timelock (CRITICAL) -- "Threshold lowered, timelock removed"</div>
+    </div>
+    <div style="margin-bottom:1rem;position:relative;">
+      <div style="position:absolute;left:-1.55rem;top:0.1rem;width:10px;height:10px;border-radius:50%;background:#333;"></div>
+      <div style="color:#565f89;font-size:0.78rem;">March 27-31</div>
+      <div style="color:#565f89;font-size:0.85rem;">Signatures collected off-chain via durable nonces</div>
+      <div style="color:#565f89;font-size:0.8rem;margin-top:0.2rem;">(undetectable -- happens in signing apps, not on-chain)</div>
+    </div>
+    <div style="position:relative;">
+      <div style="position:absolute;left:-1.55rem;top:0.1rem;width:10px;height:10px;border-radius:50%;background:#e74c3c;"></div>
+      <div style="color:#aaa;font-size:0.78rem;">April 1</div>
+      <div style="color:#e74c3c;font-size:0.85rem;font-weight:bold;">$285M drained in minutes</div>
+      <div style="color:#888;font-size:0.8rem;margin-top:0.2rem;">Too late -- execution is instantaneous with zero timelock</div>
+    </div>
+  </div>
+  <div style="margin-top:1rem;padding-top:0.8rem;border-top:1px solid #333;font-size:0.85rem;">
+    <span style="color:#ff6b35;font-weight:bold;">Prefire catches the setup phase.</span>
+    <span style="color:#aaa;"> With a 24h timelock, the execution could have been vetoed.</span>
+  </div>
+</div>
+
 <div class="stats" id="stats">
   <div class="stat"><div class="stat-value" id="stat-multisigs">—</div><div class="stat-label">Multisigs on Mainnet</div></div>
-  <div class="stat"><div class="stat-value" id="stat-zero-tl">—</div><div class="stat-label">Zero Timelock (threshold &ge;2)</div></div>
+  <div class="stat"><div class="stat-value" id="stat-zero-tl">—</div><div class="stat-label">Zero Timelock</div></div>
+  <div class="stat"><div class="stat-value" id="stat-high-risk" style="color:#e74c3c;">—</div><div class="stat-label">High Risk (&lt;50% Approval)</div></div>
   <div class="stat"><div class="stat-value" id="stat-exploits">—</div><div class="stat-label">Known Exploits Detected</div></div>
 </div>
 <div id="stats-refreshed" style="color:#565f89;font-size:0.75rem;margin-top:-1rem;margin-bottom:1rem;"></div>
 
 <div class="section">
-  <h3>Governance Health Check</h3>
-  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Full risk assessment: configuration health, nonce surveillance, and actionable recommendations.</p>
-  <input id="health-input" placeholder="Multisig address (e.g. 2LW6PSEjp81xSEtt...)" />
-  <button id="health-btn" onclick="runHealth()">Assess</button>
-  <div class="result" id="health-result"></div>
+  <h3>Ecosystem Monitor</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Live governance health of monitored multisigs. Click any row to run a full assessment.</p>
+  <div id="registry-result"><span class="loading">Loading registry...</span></div>
+</div>
+
+<div class="section">
+  <h3>Live Events</h3>
+  <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Real-time monitoring feed. Updates every 30 seconds.</p>
+  <div id="events-feed" style="font-size:0.85rem;"><span style="color:#565f89;">No events yet. Add a multisig to start monitoring.</span></div>
 </div>
 
 <div class="section">
@@ -76,6 +166,9 @@
   <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Enter a Squads v4 multisig address to scan members for durable nonce accounts.</p>
   <input id="scan-input" placeholder="Multisig address (e.g. 2LW6PSEjp81xSEtt...)" />
   <button id="scan-btn" onclick="runScan()">Scan</button>
+  <p class="examples">
+    Try: <a href="#" onclick="tryExample('scan-input', runScan, '2LW6PSEjp81xSEttWwXDB6Etb1eKdhYPbFEojYbyhx88'); return false;">Drift Protocol</a>
+  </p>
   <div class="result" id="scan-result"></div>
 </div>
 
@@ -84,6 +177,9 @@
   <p style="color:#888;font-size:0.85rem;margin-bottom:0.8rem;">Enter a transaction signature to replay through the detection pipeline.</p>
   <input id="replay-input" placeholder="Transaction signature" />
   <button id="replay-btn" onclick="runReplay()">Replay</button>
+  <p class="examples">
+    Try: <a href="#" onclick="tryExample('replay-input', runReplay, '22hpbWn63BGnFCyPruX1gcpiDMtengw3yhCeWAaXHxqZdRBzs27YQ51xKCAjTpKUz9KFjirWHyTz5SPxdkBnm45C'); return false;">Sample governance tx</a>
+  </p>
   <div class="result" id="replay-result"></div>
 </div>
 
@@ -100,12 +196,18 @@
 </div>
 
 <script>
+function tryExample(inputId, fn, value) {
+  document.getElementById(inputId).value = value;
+  fn();
+}
+
 async function loadStats() {
   try {
     const r = await fetch('/api/stats');
     const d = await r.json();
     document.getElementById('stat-multisigs').textContent = d.total_multisigs_on_mainnet.toLocaleString();
-    document.getElementById('stat-zero-tl').textContent = d.zero_timelock_with_threshold_gte_2.toLocaleString();
+    document.getElementById('stat-zero-tl').textContent = d.zero_timelock_configs.toLocaleString();
+    document.getElementById('stat-high-risk').textContent = d.high_risk_governance.toLocaleString();
     document.getElementById('stat-exploits').textContent = d.known_exploits_detected;
     if (d.last_refreshed) {
       document.getElementById('stats-refreshed').textContent = 'Live from mainnet — last refreshed: ' + d.last_refreshed;
@@ -204,6 +306,15 @@ async function runHealth() {
     html += `<span class="health-label ${labelClass}">${d.health_label}</span>`;
     html += `</div>`;
 
+    // Risk context urgency
+    if (d.risk_context) {
+      const uc = {CRITICAL:'#e74c3c',HIGH:'#f39c12',MEDIUM:'#f1c40f',LOW:'#888',INFO:'#2ecc71'}[d.risk_context.urgency] || '#888';
+      html += `<div style="background:#111;border-left:3px solid ${uc};padding:0.6rem 1rem;margin:0.5rem 0;border-radius:0 4px 4px 0;">`;
+      html += `<span class="tag" style="background:${uc}20;color:${uc};font-weight:bold;margin-right:0.5rem;">${d.risk_context.urgency}</span>`;
+      html += `<span style="color:#ccc;font-size:0.85rem;">${d.risk_context.summary}</span>`;
+      html += `</div>`;
+    }
+
     // Health bar
     html += `<div class="health-bar"><div class="health-fill" style="width:${d.health_score}%;background:${scoreColor};"></div></div>`;
 
@@ -211,6 +322,30 @@ async function runHealth() {
     html += `<p style="margin:0.8rem 0;color:#aaa;font-size:0.85rem;">`;
     html += `threshold=${d.config.threshold}/${d.config.member_count} members`;
     html += ` (${d.config.voter_count} voters) | time_lock=${d.config.time_lock}s</p>`;
+
+    // Last activity
+    if (d.last_activity) {
+      html += `<p style="margin:0 0 0.5rem;color:#aaa;font-size:0.85rem;">`;
+      html += `Last activity: <strong style="color:#e0e0e0;">${d.last_activity.relative}</strong>`;
+      html += ` <span style="color:#565f89;">(${d.last_activity.timestamp})</span></p>`;
+    } else {
+      html += `<p style="margin:0 0 0.5rem;color:#565f89;font-size:0.85rem;">Last activity: unknown</p>`;
+    }
+
+    // Vault balance
+    if (d.vault && d.vault.total_sol > 0) {
+      const sol = d.vault.total_sol;
+      const vaultColor = sol > 1000 ? '#e74c3c' : sol > 10 ? '#f39c12' : '#2ecc71';
+      html += `<p style="margin:0 0 0.5rem;font-size:0.85rem;">`;
+      html += `Vault balance: <strong style="color:${vaultColor};font-size:1rem;">${sol.toLocaleString(undefined, {maximumFractionDigits:2})} SOL</strong>`;
+      if (d.vault.vaults.length > 1) {
+        html += ` <span style="color:#888;font-size:0.8rem;">(across ${d.vault.vaults.length} vaults)</span>`;
+      }
+      for (const v of d.vault.vaults) {
+        html += `<br><span class="mono" style="font-size:0.7rem;margin-left:1rem;">vault ${v.index}: ${v.sol_balance.toFixed(3)} SOL — ${v.address}</span>`;
+      }
+      html += `</p>`;
+    }
 
     // Risks
     if (d.risks.length > 0) {
@@ -222,6 +357,25 @@ async function runHealth() {
         html += `<span style="color:#aaa;font-size:0.85rem;">${risk.reason}</span>`;
         html += `</div>`;
       }
+    }
+
+    // Config history
+    if (d.config_history && d.config_history.length > 0) {
+      html += `<h3 style="margin:1rem 0 0.5rem;font-size:0.9rem;">Config History</h3>`;
+      html += `<table><tr><th>Date</th><th>Threshold</th><th>Members</th><th>Timelock</th></tr>`;
+      for (const h of d.config_history) {
+        const tlChanged = h.time_lock !== d.config.time_lock;
+        const thChanged = h.threshold !== d.config.threshold;
+        const tlStyle = tlChanged ? 'color:#f39c12;' : '';
+        const thStyle = thChanged ? 'color:#f39c12;' : '';
+        html += `<tr>`;
+        html += `<td style="font-size:0.8rem;color:#888;">${h.timestamp}</td>`;
+        html += `<td style="${thStyle}">${h.threshold}/${h.member_count}</td>`;
+        html += `<td>${h.member_count} (${h.voter_count} voters)</td>`;
+        html += `<td style="${tlStyle}">${h.time_lock}s</td>`;
+        html += `</tr>`;
+      }
+      html += '</table>';
     }
 
     // Nonce summary
@@ -262,12 +416,102 @@ async function runHealth() {
     html += `<span style="color:#e74c3c;">health: ${d.drift_comparison.drift_health_score}/100</span></div>`;
     html += `</div>`;
 
+    // Take Action links
+    if (d.fix_links) {
+      html += `<div style="background:#1a2a1a;border:1px solid #2ecc71;border-radius:6px;padding:1rem;margin-top:1rem;">`;
+      html += `<h4 style="color:#2ecc71;font-size:0.9rem;margin-bottom:0.5rem;">Take Action</h4>`;
+      html += `<a href="${d.fix_links.squads_settings}" target="_blank" rel="noopener" style="color:#2ecc71;text-decoration:none;font-size:0.85rem;">`;
+      html += `Open Squads Settings &rarr;</a>`;
+      html += ` <span style="color:#888;font-size:0.8rem;">Change threshold, add timelock, or manage members</span>`;
+      html += `</div>`;
+    }
+
     out.innerHTML = html;
   } catch(e) { out.textContent = 'Error: ' + e.message; }
   finally { btn.disabled = false; btn.textContent = 'Assess'; }
 }
 
+async function loadRegistry() {
+  const out = document.getElementById('registry-result');
+  try {
+    const r = await fetch('/api/registry');
+    const d = await r.json();
+    if (!d.protocols || d.protocols.length === 0) { out.textContent = 'No protocols registered.'; return; }
+    let html = '<table><tr><th>Protocol</th><th>Health</th><th>Urgency</th><th>Vault (SOL)</th><th>Threshold</th><th>Timelock</th><th>Last Active</th></tr>';
+    for (const p of d.protocols) {
+      const sc = p.health_score >= 80 ? '#2ecc71' : p.health_score >= 50 ? '#f39c12' : '#e74c3c';
+      const uc = {CRITICAL:'#e74c3c',HIGH:'#f39c12',MEDIUM:'#f1c40f',LOW:'#888',INFO:'#2ecc71'}[p.urgency] || '#888';
+      html += `<tr style="cursor:pointer;" onclick="tryExample('health-input', runHealth, '${p.address}')">`;
+      html += `<td style="color:#e0e0e0;font-weight:bold;">${p.name}</td>`;
+      html += `<td style="color:${sc};font-weight:bold;">${p.health_score}/100</td>`;
+      html += `<td><span class="tag" style="background:${uc}20;color:${uc};">${p.urgency}</span></td>`;
+      html += `<td>${p.vault_sol.toLocaleString(undefined,{maximumFractionDigits:2})}</td>`;
+      html += `<td>${p.threshold}</td>`;
+      html += `<td>${p.time_lock}s</td>`;
+      html += `<td style="color:#888;">${p.last_activity}</td>`;
+      html += `</tr>`;
+    }
+    html += '</table>';
+    out.innerHTML = html;
+  } catch(e) { out.textContent = 'Error loading registry: ' + e.message; }
+}
+
+async function addWatch() {
+  const addr = document.getElementById('watch-address').value.trim();
+  if (!addr) return;
+  const out = document.getElementById('watch-result');
+  out.innerHTML = '<span class="loading">Validating multisig...</span>';
+  try {
+    const body = {
+      address: addr,
+      name: document.getElementById('watch-name').value.trim() || 'Unnamed',
+      webhook_url: document.getElementById('watch-webhook').value.trim() || null,
+      rpc_url: document.getElementById('watch-rpc').value.trim() || null,
+    };
+    const r = await fetch('/api/watch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      out.innerHTML = `<span style="color:#e74c3c;">Error: ${r.status}${r.status === 404 ? ' — not a valid Squads v4 multisig' : ''}</span>`;
+      return;
+    }
+    const d = await r.json();
+    out.innerHTML = `<span style="color:#2ecc71;">Now monitoring ${d.name} (${d.address.substring(0,8)}...)</span>`;
+    document.getElementById('watch-address').value = '';
+    document.getElementById('watch-name').value = '';
+    loadEvents();
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+}
+
+async function loadEvents() {
+  const out = document.getElementById('events-feed');
+  try {
+    const r = await fetch('/api/events');
+    const d = await r.json();
+    if (!d.events || d.events.length === 0) {
+      out.innerHTML = '<span style="color:#565f89;">No events yet. Monitoring checks every 5 minutes.</span>';
+      return;
+    }
+    let html = '';
+    for (const e of d.events) {
+      const sc = {CRITICAL:'#e74c3c',WARNING:'#f39c12',INFO:'#2ecc71'}[e.severity] || '#888';
+      html += `<div style="border-left:3px solid ${sc};padding:0.4rem 0.8rem;margin-bottom:0.5rem;background:#111;border-radius:0 4px 4px 0;">`;
+      html += `<span class="tag" style="background:${sc}20;color:${sc};margin-right:0.5rem;">${e.severity}</span>`;
+      html += `<strong style="color:#e0e0e0;">${e.name}</strong>`;
+      html += ` <span style="color:#888;font-size:0.78rem;">${e.timestamp}</span>`;
+      html += `<br><span style="color:#aaa;">${e.event_type}: ${e.details}</span>`;
+      html += `</div>`;
+    }
+    out.innerHTML = html;
+  } catch(e) { console.error(e); }
+}
+
 loadStats();
+loadRegistry();
+loadEvents();
+setInterval(loadEvents, 30000);
 </script>
 </body>
 </html>
